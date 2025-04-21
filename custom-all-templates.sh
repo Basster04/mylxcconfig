@@ -8,7 +8,7 @@
 # - Mise à jour systématique du LXC après création (apt)
 # - Installation de paquets depuis une URL externe après mise à jour (apt)
 # - Configuration automatique de montages virtiofs (Echanges_PVE1, Echanges_PVE2)
-# - **Ajout de débogage intensif pour le menu de sélection des templates**
+# - **Correction de l'extraction du nom de template (awk print $2)**
 
 # --- Configuration ---
 # URL pour la liste des paquets personnalisés à installer
@@ -73,9 +73,6 @@ check_dependencies() {
 }
 
 # --- Fonctions Whiptail avec bouton Retour ---
-# Modifie un appel whiptail pour ajouter le bouton Retour et gérer sa sortie (comme Annuler)
-# Usage: run_whiptail TYPE "Titre" "Texte" HAUTEUR LARGEUR [OPTIONS_SPECIFIQUES...] --variable VAR_NAME
-# Ex: run_whiptail --inputbox "Hostname" "Entrez le nom d'hôte:" 10 60 --variable CT_HOSTNAME
 run_whiptail() {
     local type="$1"
     local title="$2"
@@ -85,22 +82,18 @@ run_whiptail() {
     shift 5
     local var_name=""
     local args=()
-    local default_val="" # Pour --inputbox par exemple
+    local default_val=""
 
-    # Séparer les options whiptail de --variable et capturer la valeur par défaut si présente
     if [[ "$type" == "--inputbox" || "$type" == "--passwordbox" ]]; then
-        # La valeur par défaut est le premier argument après la taille dans notre convention
-        # Il faut vérifier si cet argument existe avant de l'assigner
         if [[ $# -gt 0 && "$1" != "--variable" ]]; then
             default_val="$1"
-            shift # Retirer la valeur par défaut des arguments à passer
+            shift
         fi
     fi
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --variable)
-                # S'assurer qu'il y a bien un nom de variable après --variable
                 if [[ -z "$2" ]]; then
                    echo "Erreur interne: --variable nécessite un argument" >&2
                    exit 1
@@ -119,7 +112,6 @@ run_whiptail() {
     local status
 
     while true; do
-        # Gérer la valeur initiale différemment pour inputbox/passwordbox
         if [[ "$type" == "--inputbox" ]]; then
            result=$(whiptail --title "$title" "$type" "$text" "$height" "$width" "$default_val" "${args[@]}" \
                 --ok-button "OK" --cancel-button "Annuler" --extra-button --extra-label "Retour" \
@@ -139,29 +131,24 @@ run_whiptail() {
             0) # OK
                if [[ "$type" == "--passwordbox" ]] && [[ -z "$result" ]]; then
                   whiptail --msgbox "Le mot de passe ne peut pas être vide." 8 40
-                  continue # Redemander
+                  continue
                elif [[ "$type" == "--inputbox" ]] && [[ -z "$result" ]]; then
-                  # Si une valeur par défaut était attendue, ne pas accepter vide
-                  # Note: la logique exacte dépend si vide est acceptable ou non
                   whiptail --msgbox "L'entrée ne peut pas être vide." 8 40
-                  continue # Redemander
+                  continue
                fi
-               # Si --variable est spécifié, assigner la valeur
                if [[ -n "$var_name" ]]; then
-                   # Utiliser printf pour assigner la variable dont le nom est dans var_name
                    printf -v "$var_name" '%s' "$result"
                fi
-               # msg_ok "Sélection/Entrée acceptée." # Peut être un peu verbeux ici
-               return 0 # Succès
+               return 0
                ;;
             1) # Annuler
                msg_error "Opération annulée par l'utilisateur."
                ;;
-            3) # Retour (traité comme Annuler pour l'instant)
+            3) # Retour
                msg_warn "Fonctionnalité 'Retour' sélectionnée. Opération annulée."
-               exit 1 # Quitter le script
+               exit 1
                ;;
-            *) # Echap ou autre erreur (code 255 souvent)
+            *) # Echap ou autre erreur
                msg_error "Erreur Whiptail (Code: $status) ou Echap pressé. Abandon."
                ;;
         esac
@@ -179,7 +166,6 @@ msg_info "Mise à jour de la liste des templates disponibles via 'pveam update'.
 if pveam update >/dev/null; then
     msg_ok "Liste des templates mise à jour."
 else
-    # Tenter à nouveau en affichant la sortie
     if ! pveam update; then
         msg_error "Impossible de mettre à jour la liste des templates. Vérifiez la configuration réseau/PVE et la sortie ci-dessus."
     else
@@ -189,9 +175,8 @@ fi
 
 # Sélection du Template LXC
 msg_info "Récupération des templates LXC 'system' disponibles..."
-# Utilisation de mapfile pour lire les lignes, plus sûr que la simple redirection
-mapfile -t TEMPLATES < <(pveam available --section system | awk 'NR > 1 {print $1}' | grep -v 'turnkeylinux')
-# Filtrer les templates Turnkey peut alléger la liste si elle est trop longue
+# !!! CORRECTION ICI: Utilisation de {print $2} au lieu de {print $1} !!!
+mapfile -t TEMPLATES < <(pveam available --section system | awk 'NR > 1 {print $2}' | grep -v 'turnkeylinux')
 
 if [ ${#TEMPLATES[@]} -eq 0 ]; then
     msg_error "Aucun template LXC système trouvé (après filtrage éventuel). Exécutez 'pveam update' ou vérifiez la source."
@@ -199,9 +184,9 @@ fi
 
 TEMPLATE_MENU=()
 for template in "${TEMPLATES[@]}"; do
-    # S'assurer que le template n'est pas vide avant de l'ajouter
     if [[ -n "$template" ]]; then
-        TEMPLATE_MENU+=("$template" "") # Format attendu par whiptail: tag item tag item ...
+        # Utiliser le nom du template comme tag ET comme description (item) pour whiptail
+        TEMPLATE_MENU+=("$template" "$template")
     fi
 done
 
@@ -209,55 +194,45 @@ if [ ${#TEMPLATE_MENU[@]} -eq 0 ]; then
     msg_error "Impossible de construire le menu des templates (liste vide ou invalide après traitement)."
 fi
 
-# --- !!! DEBUG INTENSIF AVANT L'APPEL WHIPTAIL !!! ---
-echo -e "\n${YW}--- DEBUG INFO: Menu Template LXC ---${CL}"
-echo "Nombre de templates bruts trouvés: ${#TEMPLATES[@]}"
-echo "Nombre d'éléments dans TEMPLATE_MENU (devrait être le double): ${#TEMPLATE_MENU[@]}"
-
-echo -e "\n${YW}Contenu COMPLET de TEMPLATE_MENU (chaque élément sur une nouvelle ligne):${CL}"
-printf "ELEMENT: '%s'\n" "${TEMPLATE_MENU[@]}"
-
-echo -e "\n${YW}Commande whiptail qui SERAIT exécutée par run_whiptail:${CL}"
-# Simuler l'appel pour voir la commande
-# Note: Cela n'exécute PAS la commande, ça l'affiche seulement.
-# Il peut y avoir des différences subtiles avec l'exécution réelle à cause de l'expansion des quotes.
-echo "whiptail --title \"Sélection du Template LXC\" --menu \"Choisissez le template LXC à utiliser:\" 20 70 12 "
-# Afficher les paires tag/item pour la commande
-printf "'%s' '%s' " "${TEMPLATE_MENU[@]}"
-echo "--ok-button \"OK\" --cancel-button \"Annuler\" --extra-button --extra-label \"Retour\" 3>&1 1>&2 2>&3"
-
-echo -e "\n${YW}Test DIRECT de whiptail --menu simple:${CL}"
-TEST_MENU=("item1" "Description 1" "item2" "Description 2")
-if whiptail --title "Test Menu Simple" --menu "Est-ce que ce menu s'affiche ?" 15 60 5 "${TEST_MENU[@]}" 3>&1 1>&2 2>&3; then
-    echo -e "${GN}Succès : Whiptail --menu simple a fonctionné.${CL}"
-else
-    local whiptail_simple_exit_code=$?
-    echo -e "${RD}ÉCHEC : Whiptail --menu simple a échoué (Code retour: $whiptail_simple_exit_code). Problème avec whiptail/terminal ?${CL}"
-fi
-
-echo -e "\n${YW}--- FIN DEBUG INFO ---${CL}"
-read -p "Appuyez sur Entrée pour continuer et tenter d'afficher le VRAI menu des templates via run_whiptail..." ENTER_KEY
-# --- FIN DU DEBUG INTENSIF ---
+# Le bloc de débogage est conservé mais commenté pour le moment.
+# Décommentez-le si le problème persiste après la correction.
+# # --- !!! DEBUG INTENSIF AVANT L'APPEL WHIPTAIL !!! ---
+# echo -e "\n${YW}--- DEBUG INFO: Menu Template LXC ---${CL}"
+# echo "Nombre de templates bruts trouvés: ${#TEMPLATES[@]}"
+# echo "Nombre d'éléments dans TEMPLATE_MENU (devrait être le double): ${#TEMPLATE_MENU[@]}"
+# echo -e "\n${YW}Contenu COMPLET de TEMPLATE_MENU (chaque élément sur une nouvelle ligne):${CL}"
+# printf "ELEMENT: '%s'\n" "${TEMPLATE_MENU[@]}"
+# echo -e "\n${YW}Commande whiptail qui SERAIT exécutée par run_whiptail:${CL}"
+# echo "whiptail --title \"Sélection du Template LXC\" --menu \"Choisissez le template LXC à utiliser:\" 20 70 12 "
+# printf "'%s' '%s' " "${TEMPLATE_MENU[@]}"
+# echo "--ok-button \"OK\" --cancel-button \"Annuler\" --extra-button --extra-label \"Retour\" 3>&1 1>&2 2>&3"
+# echo -e "\n${YW}Test DIRECT de whiptail --menu simple:${CL}"
+# TEST_MENU=("item1" "Description 1" "item2" "Description 2")
+# if whiptail --title "Test Menu Simple" --menu "Est-ce que ce menu s'affiche ?" 15 60 5 "${TEST_MENU[@]}" 3>&1 1>&2 2>&3; then
+#     echo -e "${GN}Succès : Whiptail --menu simple a fonctionné.${CL}"
+# else
+#     local whiptail_simple_exit_code=$?
+#     echo -e "${RD}ÉCHEC : Whiptail --menu simple a échoué (Code retour: $whiptail_simple_exit_code). Problème avec whiptail/terminal ?${CL}"
+# fi
+# echo -e "\n${YW}--- FIN DEBUG INFO ---${CL}"
+# read -p "Appuyez sur Entrée pour continuer et tenter d'afficher le VRAI menu des templates via run_whiptail..." ENTER_KEY
+# # --- FIN DU DEBUG INTENSIF ---
 
 SELECTED_TEMPLATE="" # Initialiser la variable
-# --> LIGNE SUIVANTE EST CELLE QUI ÉCHOUE PROBABLEMENT <--
 msg_info "Tentative d'affichage du menu des templates via run_whiptail..."
+# Note: Utilisation de TEMPLATE_MENU qui contient maintenant 'nom_template' 'nom_template'
 run_whiptail --menu "Sélection du Template LXC" "Choisissez le template LXC à utiliser:" 20 70 12 "${TEMPLATE_MENU[@]}" --variable SELECTED_TEMPLATE
-# Si on arrive ici, c'est que ça a fonctionné
 msg_ok "Template sélectionné : $SELECTED_TEMPLATE"
 
 
 # Sélection du Stockage (avec auto-sélection de local-lvm)
 msg_info "Vérification des pools de stockage disponibles pour les images de conteneur..."
 STORAGE=""
-# Vérifier si local-lvm existe et supporte les images de conteneur
-# Rediriger stderr vers /dev/null pour éviter les messages d'erreur si le pool n'existe pas
 if pvesm status --storage local-lvm --content images >/dev/null 2>&1; then
     STORAGE="local-lvm"
     msg_ok "Stockage 'local-lvm' détecté et automatiquement sélectionné."
 else
     msg_warn "Stockage 'local-lvm' non trouvé ou invalide pour les images. Sélection manuelle requise."
-    # Utilisation de mapfile ici aussi pour la robustesse
     mapfile -t STORAGE_POOLS < <(pvesm status --content images | awk 'NR>1 {print $1}')
     if [ ${#STORAGE_POOLS[@]} -eq 0 ]; then
         msg_error "Aucun pool de stockage valide pour les images de conteneur n'a été trouvé!"
@@ -265,7 +240,7 @@ else
     STORAGE_MENU=()
     for pool in "${STORAGE_POOLS[@]}"; do
         if [[ -n "$pool" ]]; then
-            STORAGE_MENU+=("$pool" "")
+            STORAGE_MENU+=("$pool" "") # Pour le stockage, le nom suffit comme tag, description vide ok.
         fi
     done
      if [ ${#STORAGE_MENU[@]} -eq 0 ]; then
@@ -274,17 +249,14 @@ else
 
     run_whiptail --menu "Sélection du Pool de Stockage" "Choisissez le pool de stockage pour le conteneur:" 15 60 5 "${STORAGE_MENU[@]}" --variable STORAGE
     msg_ok "Stockage sélectionné : $STORAGE"
-
 fi
 
 # Téléchargement du template (si nécessaire)
 msg_info "Vérification si le template '$SELECTED_TEMPLATE' est déjà téléchargé sur '$STORAGE'..."
-# Utiliser grep -q pour un test silencieux
 # Échapper les points dans le nom du template pour grep
 escaped_template=$(sed 's/[.]/\\./g' <<< "$SELECTED_TEMPLATE")
 if ! pveam list "$STORAGE" | grep -q "^${escaped_template}\$"; then
     msg_info "Template non trouvé localement. Téléchargement en cours (peut prendre du temps)..."
-    # Afficher la sortie du téléchargement pour voir la progression
     if pveam download "$STORAGE" "$SELECTED_TEMPLATE"; then
         msg_ok "Template '$SELECTED_TEMPLATE' téléchargé avec succès sur '$STORAGE'."
     else
@@ -293,11 +265,10 @@ if ! pveam list "$STORAGE" | grep -q "^${escaped_template}\$"; then
 else
     msg_ok "Template '$SELECTED_TEMPLATE' déjà disponible sur '$STORAGE'."
 fi
-TEMPLATE_PATH="$STORAGE:vztmpl/$SELECTED_TEMPLATE" # Chemin utilisé par pct create
+TEMPLATE_PATH="$STORAGE:vztmpl/$SELECTED_TEMPLATE"
 
 # Obtenir le prochain ID de CT disponible
 msg_info "Recherche du prochain ID de conteneur disponible..."
-# Utiliser pvesh pour obtenir l'ID de manière fiable
 CTID=$(pvesh get /cluster/nextid)
 if ! [[ "$CTID" =~ ^[0-9]+$ ]]; then
     msg_error "Impossible d'obtenir un ID de conteneur valide. Vérifiez la configuration PVE."
@@ -309,33 +280,22 @@ msg_info "Configuration des paramètres du conteneur..."
 CT_HOSTNAME=""
 CT_PASSWORD=""
 CT_CPUS=2
-CT_RAM=2048 # Mo
-CT_DISK_SIZE=8 # Go
-CT_BRIDGE="vmbr0" # Pont réseau par défaut, à adapter si besoin
-CT_IP_MODE="dhcp" # ou "static"
-CT_IP_ADDR="" # ex: 192.168.1.100/24
-CT_GATEWAY="" # ex: 192.168.1.1
-CT_UNPRIVILEGED=1 # Mettre à 0 pour privilégié, 1 pour non privilégié (recommandé)
-CT_NESTING=1 # Mettre à 0 si pas besoin de Docker/KVM dans le LXC
+CT_RAM=2048
+CT_DISK_SIZE=8
+CT_BRIDGE="vmbr0"
+CT_IP_MODE="dhcp"
+CT_IP_ADDR=""
+CT_GATEWAY=""
+CT_UNPRIVILEGED=1
+CT_NESTING=1
 
-# Demander le nom d'hôte
 run_whiptail --inputbox "Nom d'hôte" "Entrez le nom d'hôte du conteneur (ex: mon-lxc):" 10 60 "" --variable CT_HOSTNAME
 msg_ok "Nom d'hôte défini : $CT_HOSTNAME"
-
-# Demander le mot de passe root
 run_whiptail --passwordbox "Mot de Passe Root" "Entrez le mot de passe pour l'utilisateur root:" 10 60 "" --variable CT_PASSWORD
 msg_ok "Mot de passe root défini (ne sera pas affiché)."
 
-# --- Optionnel : Ajouter d'autres questions pour CPU, RAM, Disque, Réseau, Privilèges ---
-# run_whiptail --inputbox "CPU Cores" "Nombre de coeurs CPU:" 10 60 "$CT_CPUS" --variable CT_CPUS
-# run_whiptail --inputbox "RAM (MB)" "Quantité de RAM en Mo:" 10 60 "$CT_RAM" --variable CT_RAM
-# run_whiptail --inputbox "Disk Size (GB)" "Taille du disque racine en Go:" 10 60 "$CT_DISK_SIZE" --variable CT_DISK_SIZE
-# if run_whiptail --yesno "Conteneur Non Privilégié ?" "Créer un conteneur non privilégié (recommandé) ?" 10 60 --defaultno; then CT_UNPRIVILEGED=1; else CT_UNPRIVILEGED=0; fi
-# if run_whiptail --yesno "Activer Nesting ?" "Activer le nesting (pour Docker/KVM dans LXC) ?" 10 60 --defaultno; then CT_NESTING=1; else CT_NESTING=0; fi
-
 # Création du Conteneur
 msg_info "Création du conteneur LXC $CTID ($CT_HOSTNAME)..."
-# Construire la commande pct create dynamiquement
 cmd_create=(pct create "$CTID" "$TEMPLATE_PATH" \
     --hostname "$CT_HOSTNAME" \
     --storage "$STORAGE" \
@@ -346,34 +306,27 @@ cmd_create=(pct create "$CTID" "$TEMPLATE_PATH" \
     --password "$CT_PASSWORD" \
     --onboot 1)
 
-# Ajouter les features conditionnellement
 features=""
 if [ "$CT_UNPRIVILEGED" -eq 1 ]; then cmd_create+=(--unprivileged 1); features+="unprivileged,"; fi
 if [ "$CT_NESTING" -eq 1 ]; then features+="nesting,"; fi
-# Ajouter keyctl seulement si non privilégié (souvent nécessaire)
 if [ "$CT_UNPRIVILEGED" -eq 1 ]; then features+="keyctl,"; fi
-# Retirer la virgule finale si features n'est pas vide
 if [ -n "$features" ]; then cmd_create+=(--features "${features%,}"); fi
 
-# Ajouter le réseau
 if [ "$CT_IP_MODE" == "dhcp" ]; then
     cmd_create+=(--net0 "name=eth0,bridge=$CT_BRIDGE,ip=dhcp")
 else
     cmd_create+=(--net0 "name=eth0,bridge=$CT_BRIDGE,ip=$CT_IP_ADDR,gw=$CT_GATEWAY")
 fi
 
-# Exécuter la commande de création
-msg_info "Exécution: ${cmd_create[*]}" # Affiche la commande pour débogage
+msg_info "Exécution: ${cmd_create[*]}"
 if ! "${cmd_create[@]}"; then
     msg_error "Échec de la création du conteneur $CTID. Vérifiez la commande et les logs PVE."
 fi
-
 msg_ok "Conteneur LXC $CTID créé avec succès."
 
 # Démarrage du conteneur
 msg_info "Démarrage du conteneur $CTID..."
 if ! pct start "$CTID"; then
-    # Essayer une deuxième fois après une pause
     sleep 5
     if ! pct start "$CTID"; then
        msg_error "Impossible de démarrer le conteneur $CTID. Vérifiez la configuration et les logs."
@@ -385,27 +338,24 @@ msg_ok "Conteneur $CTID démarré."
 msg_info "Attente de l'adresse IP du conteneur via 'pct exec' (max 60 secondes)..."
 CT_IP=""
 for i in {1..30}; do
-    # Utiliser pct exec avec un timeout pour éviter de bloquer indéfiniment si le CT ne répond pas
-    # Note: `timeout` n'est pas toujours installé, alternative simple : boucle avec sleep
     CT_IP=$(pct exec $CTID -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
     if [ -n "$CT_IP" ]; then
         msg_ok "Adresse IP obtenue : $CT_IP"
         break
     fi
-    echo -n "." # Afficher une progression
+    echo -n "."
     sleep 2
 done
-echo # Nouvelle ligne après les points
+echo
 
 if [ -z "$CT_IP" ]; then
     msg_warn "Impossible de récupérer l'adresse IP du conteneur via 'pct exec'."
-    msg_warn "Tentative via 'pct guest ip $CTID' (peut nécessiter l'agent qemu-guest)..."
+    msg_warn "Tentative via 'pct guest ip $CTID'..."
     CT_IP=$(pct guest ip $CTID 2>/dev/null | grep -oP '\d+(\.\d+){3}')
      if [ -n "$CT_IP" ]; then
         msg_ok "Adresse IP obtenue via 'pct guest ip': $CT_IP"
      else
         msg_warn "Échec de la récupération de l'IP. La mise à jour et l'installation des paquets risquent d'échouer."
-        # On continue quand même, mais l'utilisateur est prévenu.
      fi
 fi
 
@@ -416,15 +366,13 @@ run_in_ct() {
     local cmd_desc="$1"
     shift
     msg_info "Exécution dans CT $ct_id: $cmd_desc..."
-    # Utiliser -- à la fin de pct exec pour bien séparer les options pct de la commande à exécuter
     if ! pct exec "$ct_id" -- "$@"; then
         msg_error "Échec de l'exécution '$cmd_desc' dans le conteneur $ct_id."
-        return 1 # Bien que msg_error quitte, c'est une bonne pratique
+        return 1
     fi
     msg_ok "$cmd_desc terminé avec succès."
     return 0
 }
-
 
 # Mise à jour du système dans le conteneur
 msg_info "Vérification de la présence de 'apt-get' dans le conteneur..."
@@ -434,21 +382,17 @@ if pct exec $CTID -- command -v apt-get >/dev/null 2>&1; then
     run_in_ct $CTID "apt-get upgrade" env DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 else
     msg_warn "Gestionnaire de paquets 'apt-get' non trouvé. La mise à jour automatique est ignorée."
-    msg_warn "Si c'est un autre système (Alpine, Fedora), adaptez le script."
 fi
 
 # Installation des paquets personnalisés
 msg_info "Tentative d'installation des paquets personnalisés depuis $PACKAGE_URL..."
 TMP_PACKAGES_FILE=$(mktemp)
-# Utiliser --connect-timeout et -m pour éviter les blocages sur curl
 if curl -fsSL --connect-timeout 10 -m 30 "$PACKAGE_URL" -o "$TMP_PACKAGES_FILE"; then
-    # Lire les paquets, ignorer commentaires/vides, nettoyer espaces, joindre avec espaces
     PACKAGES_TO_INSTALL=$(grep -vE '^\s*#|^\s*$' "$TMP_PACKAGES_FILE" | sed 's/#.*//; s/^[ \t]*//; s/[ \t]*$//' | awk 'NF > 0' | paste -sd ' ')
-    rm "$TMP_PACKAGES_FILE" # Nettoyer le fichier temporaire
+    rm "$TMP_PACKAGES_FILE"
 
     if [ -n "$PACKAGES_TO_INSTALL" ]; then
         msg_info "Paquets à installer : $PACKAGES_TO_INSTALL"
-        # Utiliser apt si disponible
         if pct exec $CTID -- command -v apt-get >/dev/null 2>&1; then
              run_in_ct $CTID "apt-get install ${PACKAGES_TO_INSTALL}" env DEBIAN_FRONTEND=noninteractive apt-get install -y $PACKAGES_TO_INSTALL
         else
@@ -460,36 +404,27 @@ if curl -fsSL --connect-timeout 10 -m 30 "$PACKAGE_URL" -o "$TMP_PACKAGES_FILE";
 else
     local curl_exit_code=$?
     msg_error "Impossible de télécharger la liste des paquets depuis $PACKAGE_URL (curl exit code: $curl_exit_code)."
-    rm "$TMP_PACKAGES_FILE" # Nettoyer même en cas d'échec curl
+    rm "$TMP_PACKAGES_FILE"
 fi
 
 # Configuration des montages VirtioFS
 msg_info "Configuration des points de montage virtiofs pour $MOUNT_TAG1 et $MOUNT_TAG2..."
-
-# 1. Créer les répertoires de montage à l'intérieur du conteneur
-# Utiliser run_in_ct pour la robustesse
 if run_in_ct $CTID "Création répertoire $MOUNT_POINT_INTERNAL1" mkdir -p "$MOUNT_POINT_INTERNAL1" && \
    run_in_ct $CTID "Création répertoire $MOUNT_POINT_INTERNAL2" mkdir -p "$MOUNT_POINT_INTERNAL2"; then
 
-    # 2. Configurer les points de montage dans la configuration PVE du conteneur
     msg_info "Application de la configuration via 'pct set'..."
     if pct set $CTID -mp${MP_INDEX1} ${MOUNT_TAG1},mp=${MOUNT_POINT_INTERNAL1},ro=0 && \
        pct set $CTID -mp${MP_INDEX2} ${MOUNT_TAG2},mp=${MOUNT_POINT_INTERNAL2},ro=0; then
         msg_ok "Points de montage virtiofs configurés dans PVE pour le conteneur $CTID."
         msg_warn "Un redémarrage du conteneur ('pct stop $CTID && pct start $CTID') est nécessaire pour activer ces montages."
 
-        # Optionnel: Proposer le redémarrage
-        # Utiliser run_whiptail pour la cohérence, mais ici --yesno n'a pas de --variable
-        # On utilise directement whiptail car run_whiptail n'est pas fait pour les booléens simples
         if whiptail --yesno "Voulez-vous redémarrer le conteneur $CTID maintenant pour activer les montages virtiofs ?" 10 70 --defaultno 3>&1 1>&2 2>&3; then
              msg_info "Redémarrage du conteneur $CTID..."
-             # Utiliser pct stop/start séparément pour mieux voir l'erreur potentielle
              if pct stop "$CTID"; then
-                sleep 2 # Petite pause avant de redémarrer
+                sleep 2
                 if pct start "$CTID"; then
                    msg_ok "Conteneur redémarré."
-                   # Retenter de récupérer l'IP après redémarrage
-                   sleep 5 # Donner du temps au redémarrage
+                   sleep 5
                    CT_IP=$(pct exec $CTID -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1) || CT_IP="Non récupérée après redémarrage"
                 else
                    msg_warn "Échec du démarrage ('pct start') après l'arrêt. Vérifiez l'état du conteneur."
@@ -501,11 +436,9 @@ if run_in_ct $CTID "Création répertoire $MOUNT_POINT_INTERNAL1" mkdir -p "$MOU
             msg_info "Redémarrage non effectué. Faites-le manuellement pour activer les montages."
         fi
     else
-        # Ne pas quitter, juste avertir
         msg_warn "Échec de la configuration des points de montage virtiofs via 'pct set'. Vérifiez les index mp et les tags."
     fi
 else
-    # Ne pas quitter, juste avertir
     msg_warn "Échec de la création des répertoires de montage dans le LXC $CTID. Les montages virtiofs ne seront pas configurés."
 fi
 
@@ -525,6 +458,6 @@ echo -e "  - Hôte: ${MOUNT_TAG1} -> Conteneur: ${MOUNT_POINT_INTERNAL1} (Index 
 echo -e "  - Hôte: ${MOUNT_TAG2} -> Conteneur: ${MOUNT_POINT_INTERNAL2} (Index ${MP_INDEX2})"
 echo -e "  ${YW}(Nécessite un redémarrage du conteneur s'il n'a pas été fait)${CL}"
 echo -e "${GN}---------------------------------------${CL}"
-msg_ok "Script terminé." # Note: peut-être 'terminé avec avertissements' si des msg_warn ont eu lieu
+msg_ok "Script terminé."
 
 exit 0
