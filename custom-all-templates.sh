@@ -3,7 +3,7 @@
 # Author: tteck (tteckster)
 # License: MIT
 # https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# --- MODIFIED VERSION - Step 4: Add Host SSH Key Injection ---
+# --- MODIFIED VERSION - Step 6: Removed Initial Permission Warning ---
 
 # --- Function Definitions (header_info, error_exit, warn, info, msg, cleanup_ctid) ---
 function header_info {
@@ -81,18 +81,14 @@ TEMPLATE=""
 HN=""
 TEMPLATE_STORAGE=""
 CONTAINER_STORAGE=""
-SELECTED_MOUNTS=()
 SELECTED_PACKAGES=()
 PASS=""
 CTID=""
 PACKAGE_LIST_URL="https://raw.githubusercontent.com/Basster04/mylxcconfig/refs/heads/main/lxc-packages.txt"
-HOST_SSH_KEY_PATH="${HOME}/.ssh/lxc.pub" # <-- Path to the public key on the host
-HOST_SSH_KEY_CONTENT="" # <-- Variable to store key content
-
-# --- Define Mount Options (Host Path Key => Guest Mount Path) ---
-declare -A MOUNT_OPTIONS
-MOUNT_OPTIONS["Echanges_PVE1"]="/mnt/pve_echanges1"
-MOUNT_OPTIONS["Echanges_PVE2"]="/mnt/pve_echanges2"
+HOST_SSH_KEY_PATH="${HOME}/.ssh/lxc.pub"
+HOST_SSH_KEY_CONTENT=""
+MANDATORY_HOST_PATH="/mnt/Echanges"
+MANDATORY_GUEST_PATH="/mnt/Echanges"
 
 # --- Main Script Loop (State Machine) ---
 while true; do
@@ -100,6 +96,8 @@ while true; do
   # --- Initial Confirmation ---
   if [[ "$CURRENT_STEP" == "start" ]]; then
     header_info
+
+    # Check SSH Key
     SSH_KEY_INFO="SSH key injection: No key found at $HOST_SSH_KEY_PATH."
     if [[ -f "$HOST_SSH_KEY_PATH" ]]; then
         HOST_SSH_KEY_CONTENT=$(cat "$HOST_SSH_KEY_PATH")
@@ -107,11 +105,18 @@ while true; do
             SSH_KEY_INFO="SSH key injection: Found key at $HOST_SSH_KEY_PATH. Will be added to LXC root."
         else
             SSH_KEY_INFO="SSH key injection: Key file $HOST_SSH_KEY_PATH found but is empty. Skipping."
-            HOST_SSH_KEY_CONTENT="" # Ensure it's empty if file was empty
+            HOST_SSH_KEY_CONTENT=""
         fi
     fi
 
-    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will guide you through creating a customized LXC container.\n\nPackages will be offered from:\n$PACKAGE_LIST_URL\n\nVirtIOFS Mounts configured will be mounted automatically on LXC boot.\n\n$SSH_KEY_INFO\n\nProceed?" 18 78; then
+    # Check Mandatory Mount Host Path
+    MANDATORY_MOUNT_INFO="Mandatory mount: '$MANDATORY_HOST_PATH' (Host) -> '$MANDATORY_GUEST_PATH' (Guest) will be configured."
+    if [ ! -d "$MANDATORY_HOST_PATH" ]; then
+        MANDATORY_MOUNT_INFO+="\n\e[93m[WARNING]\e[39m Host path '$MANDATORY_HOST_PATH' not found! Mount config will be added but may fail."
+    fi
+
+    # Confirmation Dialog (Permission Warning Removed)
+    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\nProceed?" 20 78; then
       CURRENT_STEP="select_template"
     else
       info "User aborted at start."
@@ -177,11 +182,14 @@ while true; do
     local CURRENT_STORAGE_VAR_NAME=$2
     local NEXT_STEP_ON_SUCCESS=$3
     local PREVIOUS_STEP=$4
-    local CONTENT; local CONTENT_LABEL; local AUTO_STORAGE="local";
+    local CONTENT; local CONTENT_LABEL;
+    local AUTO_STORAGE
 
     case $CLASS in
-    container) CONTENT='rootdir'; CONTENT_LABEL='Container RootFS' ;;
-    template) CONTENT='vztmpl'; CONTENT_LABEL='Container Template' ;;
+    container)
+        CONTENT='rootdir'; CONTENT_LABEL='Container RootFS'; AUTO_STORAGE="Data_VM" ;;
+    template)
+        CONTENT='vztmpl'; CONTENT_LABEL='Container Template'; AUTO_STORAGE="local" ;;
     *) die "Internal error: Invalid storage class '$CLASS'." ;;
     esac
 
@@ -194,14 +202,18 @@ while true; do
       CURRENT_STEP="$NEXT_STEP_ON_SUCCESS"
       return 0
     else
-      info "Storage '$AUTO_STORAGE' not found or doesn't support '$CONTENT'. Manual selection needed."
+      info "Preferred storage '$AUTO_STORAGE' not found or doesn't support '$CONTENT'. Manual selection needed."
     fi
 
     local -a MENU=()
     local STORAGE_LIST
     STORAGE_LIST=$(pvesm status -content $CONTENT | awk 'NR>1')
     if [ -z "$STORAGE_LIST" ]; then
-        whiptail --msgbox "Error: No storage location found with content type '$CONTENT'.\nEnable '$CONTENT' for a storage in Datacenter > Storage." 12 70
+        if [[ "$CLASS" == "container" ]]; then
+             whiptail --msgbox "Error: No storage found for Container RootFS (content '$CONTENT').\nPreferred 'Data_VM' failed. Check Datacenter > Storage." 12 70
+        else
+             whiptail --msgbox "Error: No storage found for $CONTENT_LABEL (content '$CONTENT').\nPreferred '$AUTO_STORAGE' failed. Check Datacenter > Storage." 12 70
+        fi
         CURRENT_STEP="$PREVIOUS_STEP"
         return 1
     fi
@@ -222,7 +234,7 @@ while true; do
 
     local SELECTED_STORAGE
     SELECTED_STORAGE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "Storage Selection: $CONTENT_LABEL" --radiolist \
-        "Which storage pool for the ${CONTENT_LABEL}?\n(Storage '$AUTO_STORAGE' was not suitable or not found)\n\n" \
+        "Which storage pool for the ${CONTENT_LABEL}?\n(Preferred '$AUTO_STORAGE' was not suitable or not found)\n\n" \
         20 $(($MSG_MAX_LENGTH + 25)) 10 \
         "${MENU[@]}" --ok-button "Next" --cancel-button "Back" 3>&1 1>&2 2>&3)
     EXIT_STATUS=$?
@@ -248,51 +260,8 @@ while true; do
 
   # --- Select Container Storage ---
   if [[ "$CURRENT_STEP" == "select_container_storage" ]]; then
-      select_storage_step "container" "CONTAINER_STORAGE" "select_mounts" "select_template_storage" || continue
+      select_storage_step "container" "CONTAINER_STORAGE" "select_packages" "select_template_storage" || continue
       info "Using '$CONTAINER_STORAGE' for container storage."
-      sleep 1
-  fi
-
-  # --- Optional VirtIOFS Mounts ---
-  if [[ "$CURRENT_STEP" == "select_mounts" ]]; then
-      header_info
-      SELECTED_MOUNTS=()
-
-      AVAILABLE_MOUNTS_MENU=()
-      for host_path_key in "${!MOUNT_OPTIONS[@]}"; do
-          host_full_path="/${host_path_key}"
-          if [ -d "${host_full_path}" ]; then
-              guest_path="${MOUNT_OPTIONS[$host_path_key]}"
-              AVAILABLE_MOUNTS_MENU+=("$host_path_key" "Mount host ${host_full_path} to guest ${guest_path}" "OFF")
-          else
-              warn "Host path ${host_full_path} (for key ${host_path_key}) not found. Skipping option."
-          fi
-      done
-
-      if [ ${#AVAILABLE_MOUNTS_MENU[@]} -gt 0 ]; then
-          CHOICES=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "Automatic VirtIOFS Mounts" --checklist \
-          "\nSelect shares to mount automatically in the LXC at boot:\n(Adds entries to LXC config using 'pct set -mpX')\n(Space to toggle, Enter to confirm)" \
-          15 70 5 "${AVAILABLE_MOUNTS_MENU[@]}" --ok-button "Next" --cancel-button "Back" 3>&1 1>&2 2>&3)
-          EXIT_STATUS=$?
-
-          if [ $EXIT_STATUS -eq 0 ]; then
-              readarray -t SELECTED_MOUNTS <<< "$(echo "$CHOICES" | sed 's/"//g')"
-              if [ ${#SELECTED_MOUNTS[@]} -gt 0 ]; then
-                  info "Selected automatic VirtIOFS mounts (keys):"
-                  for mount_key in "${SELECTED_MOUNTS[@]}"; do info "- $mount_key (Host: /${mount_key} -> Guest: ${MOUNT_OPTIONS[$mount_key]})"; done
-              else
-                  info "No automatic VirtIOFS mounts selected."
-              fi
-              CURRENT_STEP="select_packages"
-          else
-              info "Returning to Container Storage selection."
-              CURRENT_STEP="select_container_storage"
-              continue
-          fi
-      else
-          info "No valid VirtIOFS host paths found based on MOUNT_OPTIONS definition. Skipping mount selection."
-          CURRENT_STEP="select_packages"
-      fi
       sleep 1
   fi
 
@@ -307,8 +276,8 @@ while true; do
              info "Skipping optional package installation."
              CURRENT_STEP="confirm_summary"
           else
-             info "Returning to VirtIOFS Mount selection."
-             CURRENT_STEP="select_mounts"
+             info "Returning to Container Storage selection."
+             CURRENT_STEP="select_container_storage"
              continue
           fi
       elif ! [ -s "$TEMP_PACKAGE_LIST" ]; then
@@ -318,8 +287,8 @@ while true; do
              info "Skipping optional package installation (list was empty)."
              CURRENT_STEP="confirm_summary"
           else
-             info "Returning to VirtIOFS Mount selection."
-             CURRENT_STEP="select_mounts"
+             info "Returning to Container Storage selection."
+             CURRENT_STEP="select_container_storage"
              continue
           fi
       else
@@ -350,8 +319,8 @@ while true; do
                   fi
                   CURRENT_STEP="confirm_summary"
               else
-                  info "Returning to VirtIOFS Mount selection."
-                  CURRENT_STEP="select_mounts"
+                  info "Returning to Container Storage selection."
+                  CURRENT_STEP="select_container_storage"
                   continue
               fi
           fi
@@ -373,16 +342,10 @@ while true; do
       SUMMARY+="Root Password:    $PASS_POTENTIAL (will be set)\n"
       SUMMARY+="Template Storage: $TEMPLATE_STORAGE\n"
       SUMMARY+="RootFS Storage:   $CONTAINER_STORAGE\n"
-      SUMMARY+="Automatic Mounts (VirtIOFS):\n"
-      if [ ${#SELECTED_MOUNTS[@]} -gt 0 ]; then
-          for mount_key in "${SELECTED_MOUNTS[@]}"; do
-               if [[ -v MOUNT_OPTIONS["$mount_key"] ]]; then
-                  SUMMARY+="  - Host: /${mount_key} -> Guest: ${MOUNT_OPTIONS[$mount_key]}\n"
-              fi
-          done
-      else
-          SUMMARY+="  (None selected)\n"
-      fi
+      SUMMARY+="Mandatory Mount:\n"
+      SUMMARY+="  - Host: $MANDATORY_HOST_PATH -> Guest: $MANDATORY_GUEST_PATH\n"
+      # Removed explicit permission warning here, kept brief note
+      SUMMARY+="  (Note: Requires correct host permissions for access)\n"
       SUMMARY+="System Update:    YES (after creation)\n"
       SUMMARY+="Packages to Install:\n"
       if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
@@ -392,7 +355,6 @@ while true; do
       else
           SUMMARY+="  (None selected/deselected)\n"
       fi
-      # <-- Add SSH Key Info to Summary -->
       SUMMARY+="SSH Key Injection:\n"
       if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
            SUMMARY+="  - Will add key from host ($HOST_SSH_KEY_PATH) to /root/.ssh/authorized_keys\n"
@@ -402,7 +364,6 @@ while true; do
       SUMMARY+="\n--------------------------------------\n"
       SUMMARY+="Ready to create this LXC?"
 
-      # Increased height for SSH key info
       whiptail --backtitle "Proxmox VE Helper Scripts" --title "Confirm Creation" --yesno "$SUMMARY" 30 78 --yes-button "Create LXC" --no-button "Go Back" --cancel-button "Exit Script"
       EXIT_STATUS=$?
 
@@ -436,7 +397,7 @@ while true; do
   fi
 
   # Safety net for unknown state
-  if [[ ! "$CURRENT_STEP" =~ ^(start|select_template|set_hostname|select_template_storage|select_container_storage|select_mounts|select_packages|confirm_summary|create_lxc)$ ]]; then
+  if [[ ! "$CURRENT_STEP" =~ ^(start|select_template|set_hostname|select_template_storage|select_container_storage|select_packages|confirm_summary|create_lxc)$ ]]; then
       die "Error: Unknown script state '$CURRENT_STEP'."
   fi
 
@@ -463,9 +424,6 @@ PCT_OPTIONS=(
     -rootfs "$CONTAINER_STORAGE":8
     -arch "$HOST_ARCH"
 )
-# <-- Add SSH Public Key Option if available -->
-# Note: pct create -ssh-public-keys is simpler but requires the key file path directly.
-# We'll inject manually later for more control and better feedback.
 
 # --- Create LXC ---
 msg "Creating LXC container $CTID..."
@@ -473,25 +431,20 @@ eval pct create "$CTID" \"${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}\" "${PCT_OPTION
   die "Failed to create LXC container $CTID."
 info "LXC Container $CTID created."
 
-# --- Configure VirtIOFS Mounts (if selected) ---
-MOUNT_INDEX=0
-if [ ${#SELECTED_MOUNTS[@]} -gt 0 ]; then
-    info "Configuring automatic VirtIOFS mount points in LXC config..."
-    for mount_host_path_key in "${SELECTED_MOUNTS[@]}"; do
-        if [[ -v MOUNT_OPTIONS["$mount_host_path_key"] ]]; then
-            mount_guest_path="${MOUNT_OPTIONS[$mount_host_path_key]}"
-            host_full_path="/${mount_host_path_key}"
-            info "Setting mount point mp${MOUNT_INDEX}: Host='${host_full_path}' -> Guest='${mount_guest_path}'"
-            if [ -d "$host_full_path" ]; then
-                pct set $CTID -mp${MOUNT_INDEX} "${host_full_path},mp=${mount_guest_path},backup=0" || warn "Failed to set mount point mp${MOUNT_INDEX} for $CTID."
-                ((MOUNT_INDEX++))
-            else
-                warn "Host path '${host_full_path}' not found. Skipping config for mp${MOUNT_INDEX}."
-            fi
-        else
-             warn "Mount key '$mount_host_path_key' selected but not in MOUNT_OPTIONS. Skipping config."
-        fi
+# --- Configure Mandatory Mount Point ---
+info "Configuring mandatory mount point: Host='${MANDATORY_HOST_PATH}' -> Guest='${MANDATORY_GUEST_PATH}'"
+mp_index_set="?" # Variable to store the index used
+if [ -d "$MANDATORY_HOST_PATH" ]; then
+    mp_index=0
+    while pct config $CTID | grep -q -E "^mp${mp_index}:"; do
+        ((mp_index++))
     done
+    info "Using mount point index mp${mp_index} for mandatory mount."
+    pct set $CTID -mp${mp_index} "${MANDATORY_HOST_PATH},mp=${MANDATORY_GUEST_PATH},backup=0" || warn "Failed to set mandatory mount point mp${mp_index} for $CTID."
+    mp_index_set=$mp_index # Store the index that was actually used
+else
+    warn "Host path '${MANDATORY_HOST_PATH}' not found. Skipping configuration of mandatory mount point."
+    warn "Mount will likely fail inside the container. Create the host path and potentially restart the container or re-run 'pct set $CTID -mpX ...' manually."
 fi
 
 # --- Save Credentials ---
@@ -501,6 +454,7 @@ CREDS_FILE="${CREDS_DIR}/${HN}_${CTID}.creds"
 echo "LXC Hostname: ${HN}" > "$CREDS_FILE"
 echo "LXC ID: ${CTID}" >> "$CREDS_FILE"
 echo "Root Password: ${PASS}" >> "$CREDS_FILE"
+echo "Mandatory Mount: Host ${MANDATORY_HOST_PATH} -> Guest ${MANDATORY_GUEST_PATH} (configured as mp${mp_index_set})" >> "$CREDS_FILE" # Use stored index
 if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
     echo "SSH Key Added: Yes (from $HOST_SSH_KEY_PATH)" >> "$CREDS_FILE"
 else
@@ -517,16 +471,9 @@ sleep 8
 
 # --- Post-Start Operations ---
 
-# Ensure VirtIOFS mount point directories exist inside LXC
-if [ ${#SELECTED_MOUNTS[@]} -gt 0 ]; then
-    msg "Ensuring mount point directories exist inside LXC $CTID..."
-    for mount_host_path_key in "${SELECTED_MOUNTS[@]}"; do
-         if [[ -v MOUNT_OPTIONS["$mount_host_path_key"] ]]; then
-            mount_guest_path="${MOUNT_OPTIONS[$mount_host_path_key]}"
-            pct exec $CTID -- mkdir -p "$mount_guest_path" || warn "Attempt to create directory '$mount_guest_path' inside LXC failed."
-        fi
-    done
-fi
+# --- Ensure Mandatory Mount Directory Exists ---
+info "Ensuring mandatory mount directory exists inside LXC: ${MANDATORY_GUEST_PATH}"
+pct exec $CTID -- mkdir -p "${MANDATORY_GUEST_PATH}" || warn "Attempt to create directory '${MANDATORY_GUEST_PATH}' inside LXC failed."
 
 # Get IP Address
 set +eEuo pipefail
@@ -563,11 +510,10 @@ else
     info "No optional packages were selected for installation."
 fi
 
-# --- Inject Host SSH Key if found --- <--- NEW SECTION --->
+# --- Inject Host SSH Key if found ---
 SSH_KEY_ADDED_SUCCESS=false
 if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
     info "Adding host SSH key ($HOST_SSH_KEY_PATH) to LXC $CTID root user..."
-    # Use pipe to pass key content safely to avoid command line length issues/escaping hell
     echo "$HOST_SSH_KEY_CONTENT" | pct exec $CTID -- bash -c 'umask 077; mkdir -p /root/.ssh && cat >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && chmod 700 /root/.ssh'
     if [ $? -eq 0 ]; then
         info "Host SSH key added successfully to /root/.ssh/authorized_keys."
@@ -587,7 +533,6 @@ echo
 info "Status: $(pct status $CTID | awk '{print $2}')"
 info "IP Address: $IP"
 info "Root Password: $PASS (also saved in $CREDS_FILE)"
-# <-- Add SSH key status to final message -->
 if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
     if [[ "$SSH_KEY_ADDED_SUCCESS" == true ]]; then
         info "SSH Access: Key from $HOST_SSH_KEY_PATH added. Try: ssh root@$IP"
@@ -595,26 +540,26 @@ if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
         info "SSH Access: Failed to add key from $HOST_SSH_KEY_PATH."
     fi
 else
-    info "SSH Access: Key injection skipped (host key not found/empty)."
+    info "SSH Access: Key injection skipped."
 fi
 echo
 
-if [ ${#SELECTED_MOUNTS[@]} -gt 0 ]; then
-    info "Automatic VirtIOFS Mounts Configured (via LXC config):"
-    for mount_key in "${SELECTED_MOUNTS[@]}"; do
-        if [[ -v MOUNT_OPTIONS["$mount_key"] ]]; then
-             info "  - Host: /${mount_key} -> Guest: ${MOUNT_OPTIONS[$mount_key]}"
-         fi
-    done
-    info "(Check with 'df -h' inside the LXC)."
-    echo
+info "Mandatory Mount Configured:"
+info "  - Host: ${MANDATORY_HOST_PATH} -> Guest: ${MANDATORY_GUEST_PATH}"
+if [ ! -d "$MANDATORY_HOST_PATH" ]; then
+     info "  \e[93m[WARNING]\e[39m Host path was not found during script run. Mount will likely fail."
 fi
+# Kept the permission hint here as it's crucial for troubleshooting
+info "  (For mount to work, requires correct permissions on \e[93mHOST\e[39m path '$MANDATORY_HOST_PATH' for UID 100000)."
+info "  (Check mount status inside LXC with: df -h | grep $MANDATORY_GUEST_PATH )"
+echo
+
 if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
     info "Installed optional packages:"
     for pkg in "${SELECTED_PACKAGES[@]}"; do info "  - $pkg"; done
     echo
 fi
-info "LXC is updated and set to start on boot. Access via console or 'pct enter $CTID'."
+info "LXC is updated and set to start on boot. Access via console ('pct enter $CTID') or SSH (if key added)."
 echo; msg "Done."
 
 exit 0
