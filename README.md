@@ -10,6 +10,8 @@ cp .ssh/id_rsa.pub .ssh/lxc.pub
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Basster04/mylxcconfig/main/custom-all-templates.sh)"
-`bash`
+```
+  
 
-ezfezfez
+Configuration auto d'une VM
+------------------------------------------------------------------------------
