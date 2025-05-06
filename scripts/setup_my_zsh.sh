@@ -110,7 +110,7 @@ echo
 echo "IMPORTANT : Pour que les changements prennent effet :"
 echo "1. Fermez et rouvrez votre terminal."
 echo "   OU"
-echo "2. Exécutez la commande : source $ZSHRC_FILE"
+echo "2. Exécutez la commande : zsh"
 echo "-----------------------------------------------------"
 
 # Vérifie si Zsh est le shell par défaut et suggère comment le changer si ce n'est pas le cas
@@ -119,7 +119,7 @@ if [ "$(basename "$SHELL")" != "zsh" ]; then
     echo "NOTE : Votre shell par défaut n'est pas Zsh. Pour en profiter pleinement,"
     echo "vous pouvez le changer avec la commande :"
     if command_exists chsh && command_exists zsh; then
-         echo "  chsh -s \"$(command -v zsh)\""
+         echo "  chsh -s \"$(which -v zsh)\""
          echo "(Vous devrez peut-être vous déconnecter/reconnecter pour que cela prenne effet partout)."
     else
          echo "  (Impossible de déterminer la commande 'chsh' ou le chemin de 'zsh' automatiquement)."
