@@ -4,7 +4,6 @@
 # License: MIT
 # https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # --- MODIFIED VERSION - Step 6: Removed Initial Permission Warning ---
-# --- MODIFIED VERSION - Added Custom Zsh Setup Integration ---
 
 # --- Function Definitions (header_info, error_exit, warn, info, msg, cleanup_ctid) ---
 function header_info {
@@ -16,7 +15,7 @@ function header_info {
 /_/ |_/_/_/   /_/  \__/_/_/_/ .__/_/\_,_/\__/\__/___/
                            /_/
 
-     Custom LXC Creation Script (with Zsh Setup)
+     Custom LXC Creation Script
 EOF
 }
 
@@ -86,7 +85,6 @@ SELECTED_PACKAGES=()
 PASS=""
 CTID=""
 PACKAGE_LIST_URL="https://raw.githubusercontent.com/Basster04/mylxcconfig/refs/heads/main/lxc-packages.txt"
-ZSH_SETUP_SCRIPT_URL="https://raw.githubusercontent.com/Basster04/mylxcconfig/main/scripts/setup_my_zsh.sh" # URL of your Zsh script
 HOST_SSH_KEY_PATH="${HOME}/.ssh/lxc.pub"
 HOST_SSH_KEY_CONTENT=""
 MANDATORY_HOST_PATH="/mnt/Echanges"
@@ -118,7 +116,7 @@ while true; do
     fi
 
     # Confirmation Dialog (Permission Warning Removed)
-    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\nThis script will also attempt to automatically install Oh My Zsh using:\n$ZSH_SETUP_SCRIPT_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\nProceed?" 22 78; then
+    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\nProceed?" 20 78; then
       CURRENT_STEP="select_template"
     else
       info "User aborted at start."
@@ -346,11 +344,10 @@ while true; do
       SUMMARY+="RootFS Storage:   $CONTAINER_STORAGE\n"
       SUMMARY+="Mandatory Mount:\n"
       SUMMARY+="  - Host: $MANDATORY_HOST_PATH -> Guest: $MANDATORY_GUEST_PATH\n"
+      # Removed explicit permission warning here, kept brief note
       SUMMARY+="  (Note: Requires correct host permissions for access)\n"
       SUMMARY+="System Update:    YES (after creation)\n"
-      SUMMARY+="Zsh Auto-Setup:   YES (using script from your repo)\n" # Added Zsh info
-      SUMMARY+="Required Pkgs:    git, curl, zsh (will be installed)\n" # Added required pkgs
-      SUMMARY+="Packages to Install (Optional):\n"
+      SUMMARY+="Packages to Install:\n"
       if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
           for pkg in "${SELECTED_PACKAGES[@]}"; do
               SUMMARY+="  - $pkg\n"
@@ -367,7 +364,7 @@ while true; do
       SUMMARY+="\n--------------------------------------\n"
       SUMMARY+="Ready to create this LXC?"
 
-      whiptail --backtitle "Proxmox VE Helper Scripts" --title "Confirm Creation" --yesno "$SUMMARY" 33 78 --yes-button "Create LXC" --no-button "Go Back" --cancel-button "Exit Script"
+      whiptail --backtitle "Proxmox VE Helper Scripts" --title "Confirm Creation" --yesno "$SUMMARY" 30 78 --yes-button "Create LXC" --no-button "Go Back" --cancel-button "Exit Script"
       EXIT_STATUS=$?
 
       case $EXIT_STATUS in
@@ -422,7 +419,7 @@ PCT_OPTIONS=(
     -hostname "$HN" -net0 name=eth0,bridge=vmbr0,ip=dhcp
     -cores 2 -memory 2048 -onboot 1
     -password "$PASS"
-    -tags proxmox-helper-scripts,custom,zsh-setup -unprivileged 1 # Added zsh-setup tag
+    -tags proxmox-helper-scripts,custom -unprivileged 1
     -features keyctl=1,nesting=1
     -rootfs "$CONTAINER_STORAGE":8
     -arch "$HOST_ARCH"
@@ -463,7 +460,6 @@ if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
 else
     echo "SSH Key Added: No (file not found or empty)" >> "$CREDS_FILE"
 fi
-echo "Zsh Auto-Setup Attempted: Yes" >> "$CREDS_FILE" # Added info about Zsh setup attempt
 chmod 600 "$CREDS_FILE"
 info "Credentials saved to $CREDS_FILE"
 
@@ -504,17 +500,12 @@ info "Performing system update (apt update && apt upgrade -y) inside LXC $CTID..
 pct exec $CTID -- bash -c 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get -y upgrade' || warn "System update/upgrade failed inside LXC $CTID."
 info "System update completed."
 
-# --- Install Essential Packages for Zsh Setup ---
-info "Installing essential packages (git, curl, zsh) for Zsh setup..."
-pct exec $CTID -- bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null && apt-get install -y git curl zsh" || warn "Failed to install essential packages (git, curl, zsh) inside LXC $CTID. Zsh setup might fail."
-info "Essential package installation attempt completed."
-
-# Install Selected Optional Packages
+# Install Selected Packages
 if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
     PACKAGES_TO_INSTALL=$(echo "${SELECTED_PACKAGES[@]}" | tr '\n' ' ')
-    info "Installing selected optional packages ($PACKAGES_TO_INSTALL) inside LXC $CTID..."
-    pct exec $CTID -- bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get install -y $PACKAGES_TO_INSTALL" || warn "Failed to install selected optional packages inside LXC $CTID."
-    info "Selected optional packages installation attempt completed."
+    info "Installing selected packages ($PACKAGES_TO_INSTALL) inside LXC $CTID..."
+    pct exec $CTID -- bash -c "export DEBIAN_FRONTEND=noninteractive; apt-get install -y $PACKAGES_TO_INSTALL" || warn "Failed to install selected packages inside LXC $CTID."
+    info "Selected packages installation attempt completed."
 else
     info "No optional packages were selected for installation."
 fi
@@ -533,55 +524,6 @@ if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
 else
     info "Skipping SSH key addition (key file not found or empty)."
 fi
-
-# --- Run Custom Zsh Setup Script ---
-ZSH_SETUP_SUCCESS=false
-info "Attempting to download and run custom Zsh setup script..."
-LXC_SCRIPT_PATH="/tmp/setup_my_zsh.sh"
-
-# Download
-# Use pct exec with wget or curl inside the container
-pct exec $CTID -- curl -fsSL "$ZSH_SETUP_SCRIPT_URL" -o "$LXC_SCRIPT_PATH"
-if [ $? -ne 0 ]; then
-    warn "Failed to download Zsh setup script from $ZSH_SETUP_SCRIPT_URL inside LXC."
-else
-    info "Zsh setup script downloaded to $LXC_SCRIPT_PATH inside LXC."
-    # Make executable
-    pct exec $CTID -- chmod +x "$LXC_SCRIPT_PATH"
-    if [ $? -ne 0 ]; then
-        warn "Failed to make Zsh setup script executable inside LXC."
-    else
-        # Execute
-        info "Running Zsh setup script inside LXC (this might take a moment)..."
-        # Execute with bash, assuming bash is available in the container
-        pct exec $CTID -- bash "$LXC_SCRIPT_PATH"
-        if [ $? -ne 0 ]; then
-            warn "Custom Zsh setup script execution failed inside LXC $CTID. Check logs or run manually."
-        else
-            info "Custom Zsh setup script executed successfully."
-            ZSH_SETUP_SUCCESS=true # Mark as successful
-
-            # Attempt to change default shell for root user to zsh
-            # This might require the 'zsh' package to be installed first
-            ZSH_PATH_IN_LXC=$(pct exec $CTID -- command -v zsh)
-            if [ -n "$ZSH_PATH_IN_LXC" ]; then
-                 info "Attempting to set Zsh ('$ZSH_PATH_IN_LXC') as the default shell for root..."
-                 pct exec $CTID -- chsh -s "$ZSH_PATH_IN_LXC" root
-                 if [ $? -ne 0 ]; then
-                     warn "Failed to automatically set Zsh as default shell for root. You may need to run 'chsh -s $ZSH_PATH_IN_LXC' manually inside the LXC."
-                 else
-                     info "Successfully set Zsh as default shell for root."
-                 fi
-            else
-                 warn "Could not find zsh path inside the LXC. Cannot attempt to set it as default shell."
-            fi
-        fi
-    fi
-    # Cleanup
-    info "Cleaning up Zsh setup script from LXC..."
-    pct exec $CTID -- rm -f "$LXC_SCRIPT_PATH" || warn "Failed to remove Zsh setup script from $LXC_SCRIPT_PATH inside LXC."
-fi
-echo # Add a newline for better log readability
 
 
 # --- Success Message ---
@@ -607,6 +549,7 @@ info "  - Host: ${MANDATORY_HOST_PATH} -> Guest: ${MANDATORY_GUEST_PATH}"
 if [ ! -d "$MANDATORY_HOST_PATH" ]; then
      info "  \e[93m[WARNING]\e[39m Host path was not found during script run. Mount will likely fail."
 fi
+# Kept the permission hint here as it's crucial for troubleshooting
 info "  (For mount to work, requires correct permissions on \e[93mHOST\e[39m path '$MANDATORY_HOST_PATH' for UID 100000)."
 info "  (Check mount status inside LXC with: df -h | grep $MANDATORY_GUEST_PATH )"
 echo
@@ -616,20 +559,6 @@ if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
     for pkg in "${SELECTED_PACKAGES[@]}"; do info "  - $pkg"; done
     echo
 fi
-
-# Zsh setup info
-info "Custom Zsh Setup:"
-if [[ "$ZSH_SETUP_SUCCESS" == true ]]; then
-    info "  - Oh My Zsh, theme, and plugins script executed successfully."
-    info "  - Attempted to set Zsh as the default shell for root."
-    info "  - Zsh configuration should be active on next login (via 'pct enter $CTID' or SSH)."
-    info "  - If Zsh is not the default shell, run 'chsh -s \$(which zsh)' inside the LXC."
-else
-    info "  - \e[93m[WARNING]\e[39m Custom Zsh setup script failed to download or execute correctly."
-    info "  - You may need to install/configure Oh My Zsh manually inside the LXC."
-fi
-echo
-
 info "LXC is updated and set to start on boot. Access via console ('pct enter $CTID') or SSH (if key added)."
 echo; msg "Done."
 

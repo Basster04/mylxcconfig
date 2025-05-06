@@ -4,6 +4,7 @@
 # License: MIT
 # https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # --- MODIFIED VERSION - Step 6: Removed Initial Permission Warning ---
+# --- MODIFIED VERSION - Added Git Repo Script Copy Feature ---
 
 # --- Function Definitions (header_info, error_exit, warn, info, msg, cleanup_ctid) ---
 function header_info {
@@ -90,6 +91,13 @@ HOST_SSH_KEY_CONTENT=""
 MANDATORY_HOST_PATH="/mnt/Echanges"
 MANDATORY_GUEST_PATH="/mnt/Echanges"
 
+# --- NOUVEAU: Variables pour le clonage Git ---
+GIT_REPO_URL="https://github.com/Basster04/mylxcconfig.git"
+GIT_REPO_SOURCE_DIR="scripts" # Le dossier à copier DANS le dépôt cloné
+LXC_SCRIPT_DEST="/root/scripts" # Le dossier de destination DANS le LXC
+LXC_TEMP_CLONE_PATH="/tmp/mylxcconfig_clone_$$" # Dossier temporaire pour le clonage
+GIT_CLONE_SCRIPT_SUCCESS=false # Suivi du succès de l'opération
+
 # --- Main Script Loop (State Machine) ---
 while true; do
 
@@ -115,8 +123,11 @@ while true; do
         MANDATORY_MOUNT_INFO+="\n\e[93m[WARNING]\e[39m Host path '$MANDATORY_HOST_PATH' not found! Mount config will be added but may fail."
     fi
 
+    # NOUVEAU: Info sur le clonage Git
+    GIT_CLONE_INFO="Git Repo Scripts: Will clone '$GIT_REPO_URL', copy '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST', and make scripts executable."
+
     # Confirmation Dialog (Permission Warning Removed)
-    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\nProceed?" 20 78; then
+    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\n$GIT_CLONE_INFO\n\nProceed?" 22 78; then
       CURRENT_STEP="select_template"
     else
       info "User aborted at start."
@@ -344,7 +355,6 @@ while true; do
       SUMMARY+="RootFS Storage:   $CONTAINER_STORAGE\n"
       SUMMARY+="Mandatory Mount:\n"
       SUMMARY+="  - Host: $MANDATORY_HOST_PATH -> Guest: $MANDATORY_GUEST_PATH\n"
-      # Removed explicit permission warning here, kept brief note
       SUMMARY+="  (Note: Requires correct host permissions for access)\n"
       SUMMARY+="System Update:    YES (after creation)\n"
       SUMMARY+="Packages to Install:\n"
@@ -361,10 +371,15 @@ while true; do
       else
            SUMMARY+="  - Skipped (Host key $HOST_SSH_KEY_PATH not found or empty)\n"
       fi
+      # NOUVEAU: Info sur le clonage Git dans le résumé
+      SUMMARY+="Git Repo Scripts:\n"
+      SUMMARY+="  - Will clone '$GIT_REPO_URL'\n"
+      SUMMARY+="  - Copy '$GIT_REPO_SOURCE_DIR' dir to '$LXC_SCRIPT_DEST'\n"
+      SUMMARY+="  - Make scripts executable\n"
       SUMMARY+="\n--------------------------------------\n"
       SUMMARY+="Ready to create this LXC?"
 
-      whiptail --backtitle "Proxmox VE Helper Scripts" --title "Confirm Creation" --yesno "$SUMMARY" 30 78 --yes-button "Create LXC" --no-button "Go Back" --cancel-button "Exit Script"
+      whiptail --backtitle "Proxmox VE Helper Scripts" --title "Confirm Creation" --yesno "$SUMMARY" 33 78 --yes-button "Create LXC" --no-button "Go Back" --cancel-button "Exit Script"
       EXIT_STATUS=$?
 
       case $EXIT_STATUS in
@@ -460,6 +475,8 @@ if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
 else
     echo "SSH Key Added: No (file not found or empty)" >> "$CREDS_FILE"
 fi
+# NOUVEAU: Info Git dans le fichier creds (sera mis à jour plus tard avec le succès/échec)
+echo "Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): Attempting copy to $LXC_SCRIPT_DEST" >> "$CREDS_FILE"
 chmod 600 "$CREDS_FILE"
 info "Credentials saved to $CREDS_FILE"
 
@@ -525,6 +542,74 @@ else
     info "Skipping SSH key addition (key file not found or empty)."
 fi
 
+# --- NOUVEAU: Clone Git Repo, Copy Scripts, Set Permissions ---
+info "Attempting Git operations: Clone '$GIT_REPO_URL', copy '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST'..."
+
+# Définir les commandes à exécuter dans le conteneur
+# Utilisation de && pour chaîner les commandes : si une échoue, les suivantes ne s'exécutent pas.
+COMMANDS_TO_RUN=$(cat <<EOF
+export DEBIAN_FRONTEND=noninteractive;
+echo '>>> [GitOps] Installing git...';
+apt-get update > /dev/null && apt-get install -y git;
+if [ \$? -ne 0 ]; then echo 'ERROR: Failed to install git.' >&2; exit 1; fi;
+
+echo '>>> [GitOps] Removing previous temporary clone directory (if any)...';
+rm -rf '$LXC_TEMP_CLONE_PATH';
+
+echo '>>> [GitOps] Cloning repository $GIT_REPO_URL...';
+git clone --depth 1 '$GIT_REPO_URL' '$LXC_TEMP_CLONE_PATH';
+if [ \$? -ne 0 ]; then echo 'ERROR: Failed to clone repository $GIT_REPO_URL.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
+
+echo '>>> [GitOps] Checking if source directory exists: ${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}';
+if [ ! -d '${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}' ]; then
+    echo 'ERROR: Source directory ${GIT_REPO_SOURCE_DIR} not found in the cloned repository.' >&2;
+    rm -rf '$LXC_TEMP_CLONE_PATH'; # Nettoyer le clone temporaire
+    exit 1;
+fi;
+
+echo '>>> [GitOps] Creating destination directory $LXC_SCRIPT_DEST...';
+mkdir -p '$LXC_SCRIPT_DEST';
+if [ \$? -ne 0 ]; then echo 'ERROR: Failed to create destination directory $LXC_SCRIPT_DEST.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
+
+echo '>>> [GitOps] Copying directory contents from ${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR} to $LXC_SCRIPT_DEST...';
+# Copie le contenu du dossier source vers la destination. Le /.' est important.
+cp -r '${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}/.' '$LXC_SCRIPT_DEST/';
+if [ \$? -ne 0 ]; then echo 'ERROR: Failed to copy script directory.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
+
+echo '>>> [GitOps] Setting execute permissions on files in $LXC_SCRIPT_DEST...';
+find '$LXC_SCRIPT_DEST' -type f -exec chmod +x {} \; ;
+if [ \$? -ne 0 ]; then echo 'WARNING: Failed to set execute permissions on some scripts.' >&2; fi; # Peut-être juste un avertissement ici?
+
+echo '>>> [GitOps] Cleaning up temporary clone directory $LXC_TEMP_CLONE_PATH...';
+rm -rf '$LXC_TEMP_CLONE_PATH';
+
+echo '>>> [GitOps] Script copy and permission setting completed.';
+exit 0; # Succès global des opérations Git
+EOF
+)
+
+# Exécuter les commandes dans le conteneur
+# Désactiver temporairement l'arrêt sur erreur pour capturer le code de sortie de pct exec
+set +e
+pct exec $CTID -- bash -c "$COMMANDS_TO_RUN"
+EXEC_STATUS=$?
+set -e # Réactiver l'arrêt sur erreur
+
+# Vérifier le succès de l'opération Git
+if [ $EXEC_STATUS -eq 0 ]; then
+    info "Successfully cloned repo, copied '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST', and set permissions."
+    GIT_CLONE_SCRIPT_SUCCESS=true
+    # Mettre à jour le fichier creds pour indiquer le succès
+    sed -i "/^Git Scripts/c\Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): Successfully copied to $LXC_SCRIPT_DEST" "$CREDS_FILE"
+else
+    warn "Git operations failed (clone, copy, or chmod). Check logs above for details."
+    GIT_CLONE_SCRIPT_SUCCESS=false
+    # Mettre à jour le fichier creds pour indiquer l'échec
+    sed -i "/^Git Scripts/c\Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): FAILED to copy to $LXC_SCRIPT_DEST" "$CREDS_FILE"
+    # Ne pas mourir ici, l'échec du clonage n'est peut-être pas critique pour l'utilisateur
+fi
+# --- Fin de la section Git ---
+
 
 # --- Success Message ---
 header_info; echo
@@ -549,7 +634,6 @@ info "  - Host: ${MANDATORY_HOST_PATH} -> Guest: ${MANDATORY_GUEST_PATH}"
 if [ ! -d "$MANDATORY_HOST_PATH" ]; then
      info "  \e[93m[WARNING]\e[39m Host path was not found during script run. Mount will likely fail."
 fi
-# Kept the permission hint here as it's crucial for troubleshooting
 info "  (For mount to work, requires correct permissions on \e[93mHOST\e[39m path '$MANDATORY_HOST_PATH' for UID 100000)."
 info "  (Check mount status inside LXC with: df -h | grep $MANDATORY_GUEST_PATH )"
 echo
@@ -559,6 +643,19 @@ if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
     for pkg in "${SELECTED_PACKAGES[@]}"; do info "  - $pkg"; done
     echo
 fi
+
+# NOUVEAU: Message sur le statut des scripts Git
+info "Git Repository Scripts:"
+if [[ "$GIT_CLONE_SCRIPT_SUCCESS" == true ]]; then
+    info "  - Successfully cloned '$GIT_REPO_URL'"
+    info "  - Copied '$GIT_REPO_SOURCE_DIR' content to '$LXC_SCRIPT_DEST' inside the LXC."
+    info "  - Scripts within '$LXC_SCRIPT_DEST' should be executable."
+else
+    info "  \e[93m[WARNING]\e[39m Failed to clone/copy/set permissions for scripts from '$GIT_REPO_URL'."
+    info "  - Check the script output above for error messages from inside the container."
+fi
+echo
+
 info "LXC is updated and set to start on boot. Access via console ('pct enter $CTID') or SSH (if key added)."
 echo; msg "Done."
 
