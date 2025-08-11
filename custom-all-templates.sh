@@ -577,7 +577,7 @@ cp -r '${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}/.' '$LXC_SCRIPT_DEST/';
 if [ \$? -ne 0 ]; then echo 'ERROR: Failed to copy script directory.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
 
 echo '>>> [GitOps] Setting execute permissions on files in $LXC_SCRIPT_DEST...';
-find '$LXC_SCRIPT_DEST' -type f -exec chmod +x {} \; ;
+find '$LXC_SCRIPT_DEST' -type f -name '*.sh' -exec chmod +x {} \; ;
 if [ \$? -ne 0 ]; then echo 'WARNING: Failed to set execute permissions on some scripts.' >&2; fi; # Peut-être juste un avertissement ici?
 
 echo '>>> [GitOps] Cleaning up temporary clone directory $LXC_TEMP_CLONE_PATH...';
