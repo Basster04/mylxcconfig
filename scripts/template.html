@@ -1,0 +1,59 @@
+import http.server
+import socketserver
+import os
+import socket
+from datetime import datetime
+
+# --- FONCTION UTILITAIRE POUR TROUVER L'IP LOCALE ---
+# Cette méthode est plus fiable dans les conteneurs Docker/LXC
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # N'a pas besoin d'être joignable
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1' # Fallback
+    finally:
+        s.close()
+    return IP
+
+# --- CONFIGURATION DU SERVEUR ---
+PORT = int(os.environ.get('WEB_APP_PORT', 8080))
+HOSTNAME = socket.gethostname()
+IP_ADDRESS = get_local_ip()
+
+class MyHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            # 1. Lire le fichier template
+            with open('template.html', 'r', encoding='utf-8') as f:
+                template_content = f.read()
+
+            # 2. Remplacer les placeholders par les vraies valeurs
+            final_html = template_content.replace('__SERVER_IP__', IP_ADDRESS)
+            final_html = final_html.replace('__SERVER_PORT__', str(PORT))
+            final_html = final_html.replace('__SERVER_HOSTNAME__', HOSTNAME)
+            
+            current_time = datetime.now().strftime('%d/%m/%Y à %H:%M:%S')
+            final_html = final_html.replace('__CURRENT_TIME__', current_time)
+
+            # 3. Envoyer la page HTML générée
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(final_html.encode('utf-8'))
+            print(f"INFO: Page de statut servie à {self.client_address[0]}")
+
+        except Exception as e:
+            error_message = f"Erreur interne du serveur: {e}"
+            print(f"ERREUR: {error_message}")
+            self.send_error(500, error_message)
+
+print(f"--- Serveur de statut démarré ---")
+print(f"  URL: http://{IP_ADDRESS}:{PORT}")
+print(f"  Hostname: {HOSTNAME}")
+print("---------------------------------")
+
+with socketserver.TCPServer(("", PORT), MyHandler) as httpd:
+    httpd.serve_forever()
