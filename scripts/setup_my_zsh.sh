@@ -119,7 +119,7 @@ if [ "$(basename "$SHELL")" != "zsh" ]; then
     echo "NOTE : Votre shell par défaut n'est pas Zsh. Pour en profiter pleinement,"
     echo "vous pouvez le changer avec la commande :"
     if command_exists chsh && command_exists zsh; then
-         echo "  chsh -s \"$(which -v zsh)\""
+         echo "  chsh -s \"$(which zsh)\""
          echo "(Vous devrez peut-être vous déconnecter/reconnecter pour que cela prenne effet partout)."
     else
          echo "  (Impossible de déterminer la commande 'chsh' ou le chemin de 'zsh' automatiquement)."
