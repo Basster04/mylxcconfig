@@ -1,6 +1,5 @@
 tree
 curl
-wget
 zsh
 bat
 ripgrep
