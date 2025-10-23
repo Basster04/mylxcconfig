@@ -4,3 +4,4 @@ zsh
 bat
 ripgrep
 btop
+nmap
