@@ -126,4 +126,41 @@ if [ "$(basename "$SHELL")" != "zsh" ]; then
     fi
 fi
 
+# --- Étape additionnelle: Changer le shell par default si Zsh est installé ---
+echo "Tentative de définition de Zsh comme shell par défaut..."
+if command_exists zsh && command_exists chsh; then
+    # Utilisation de 'which zsh' sans l'option -v pour une meilleure compatibilité
+    ZSH_PATH=$(which zsh)
+    if [ "$ZSH_PATH" ]; then
+        if [ "$SHELL" != "$ZSH_PATH" ]; then
+            echo "Changement du shell par défaut pour l'utilisateur actuel à '$ZSH_PATH'."
+            # chsh demande un mot de passe s'il n'est pas exécuté par root.
+            # Pour un script non interactif, cela peut nécessiter 'sudo' si l'utilisateur a les droits,
+            # ou une exécution manuelle.
+            # Si le script est exécuté en tant que root, il peut changer le shell de l'utilisateur cible.
+            # Pour l'utilisateur actuel, il faut un mot de passe.
+            # Pour la simplicité et la sécurité, il est souvent préférable de le faire manuellement.
+
+            # Si le script est exécuté par root (UID 0), nous pouvons tenter de changer le shell
+            # de l'utilisateur qui a lancé le script, ou de l'utilisateur 'root' lui-même.
+            # Pour un LXC, souvent l'utilisateur principal est 'root' ou un utilisateur spécifique.
+            if [ "$(id -u)" -eq 0 ]; then # Si l'utilisateur actuel est root
+                # Changer le shell de l'utilisateur 'root'
+                echo "Exécution de 'chsh -s \"$ZSH_PATH\"' pour l'utilisateur root."
+                chsh -s "$ZSH_PATH" || echo "Impossible de changer le shell par défaut pour root."
+            else
+                echo "Veuillez exécuter 'chsh -s \"$ZSH_PATH\"' manuellement et entrer votre mot de passe pour définir Zsh comme shell par défaut."
+                echo "Ceci doit être fait après l'exécution du script, une fois que Zsh est installé."
+            fi
+        else
+            echo "Zsh est déjà votre shell par défaut."
+        fi
+    else
+        echo "Impossible de trouver le chemin de Zsh. Impossible de définir comme shell par défaut."
+    fi
+else
+    echo "Les commandes 'zsh' ou 'chsh' sont manquantes. Impossible de définir Zsh comme shell par défaut."
+fi
+echo
+
 exit 0
