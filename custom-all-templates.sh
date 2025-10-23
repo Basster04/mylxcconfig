@@ -5,6 +5,7 @@
 # https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # --- MODIFIED VERSION - Step 6: Removed Initial Permission Warning ---
 # --- MODIFIED VERSION - Added Git Repo Script Copy Feature ---
+# --- MODIFIED VERSION - Added Interactive Menu for "Echanges" Folder ---
 
 # --- Function Definitions (header_info, error_exit, warn, info, msg, cleanup_ctid) ---
 function header_info {
@@ -88,15 +89,18 @@ CTID=""
 PACKAGE_LIST_URL="https://raw.githubusercontent.com/Basster04/mylxcconfig/refs/heads/main/lxc-packages.txt"
 HOST_SSH_KEY_PATH="${HOME}/.ssh/lxc.pub"
 HOST_SSH_KEY_CONTENT=""
-MANDATORY_HOST_PATH="/mnt/Echanges"
-MANDATORY_GUEST_PATH="/mnt/Echanges"
+# --- MODIFIÉ --- Renommage des variables (plus "Mandatory")
+ECHANGES_HOST_PATH="/mnt/Echanges"
+ECHANGES_GUEST_PATH="/mnt/Echanges"
+# --- NOUVEAU --- Variable pour stocker le choix du menu "Echanges"
+ECHANGES_CHOICE="mount" # 'mount', 'folder', or 'none'. Défaut: 'mount' pour garder le comportement original
 
-# --- NOUVEAU: Variables pour le clonage Git ---
+# --- Variables pour le clonage Git ---
 GIT_REPO_URL="https://github.com/Basster04/mylxcconfig.git"
-GIT_REPO_SOURCE_DIR="scripts" # Le dossier à copier DANS le dépôt cloné
-LXC_SCRIPT_DEST="/root/scripts" # Le dossier de destination DANS le LXC
-LXC_TEMP_CLONE_PATH="/tmp/mylxcconfig_clone_$$" # Dossier temporaire pour le clonage
-GIT_CLONE_SCRIPT_SUCCESS=false # Suivi du succès de l'opération
+GIT_REPO_SOURCE_DIR="scripts"
+LXC_SCRIPT_DEST="/root/scripts"
+LXC_TEMP_CLONE_PATH="/tmp/mylxcconfig_clone_$$"
+GIT_CLONE_SCRIPT_SUCCESS=false
 
 # --- Main Script Loop (State Machine) ---
 while true; do
@@ -117,17 +121,14 @@ while true; do
         fi
     fi
 
-    # Check Mandatory Mount Host Path
-    MANDATORY_MOUNT_INFO="Mandatory mount: '$MANDATORY_HOST_PATH' (Host) -> '$MANDATORY_GUEST_PATH' (Guest) will be configured."
-    if [ ! -d "$MANDATORY_HOST_PATH" ]; then
-        MANDATORY_MOUNT_INFO+="\n\e[93m[WARNING]\e[39m Host path '$MANDATORY_HOST_PATH' not found! Mount config will be added but may fail."
-    fi
-
-    # NOUVEAU: Info sur le clonage Git
+    # --- MODIFIÉ --- L'info sur le montage est devenue plus générale
+    ECHANGES_INFO="Dossier 'Echanges': Le script vous demandera comment le configurer (montage partagé, dossier vide, ou rien)."
+    
+    # Info sur le clonage Git
     GIT_CLONE_INFO="Git Repo Scripts: Will clone '$GIT_REPO_URL', copy '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST', and make scripts executable."
 
-    # Confirmation Dialog (Permission Warning Removed)
-    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$MANDATORY_MOUNT_INFO\n\n$SSH_KEY_INFO\n\n$GIT_CLONE_INFO\n\nProceed?" 22 78; then
+    # Confirmation Dialog
+    if whiptail --backtitle "Proxmox VE Helper Scripts" --title "Custom LXC Creation" --yesno "This script will create a customized LXC container.\n\nContainer RootFS Storage Default: Data_VM\nPackages offered from: $PACKAGE_LIST_URL\n\n$ECHANGES_INFO\n\n$SSH_KEY_INFO\n\n$GIT_CLONE_INFO\n\nProceed?" 22 78; then
       CURRENT_STEP="select_template"
     else
       info "User aborted at start."
@@ -137,6 +138,7 @@ while true; do
 
   # --- Template Selection ---
   if [[ "$CURRENT_STEP" == "select_template" ]]; then
+    # ... (code inchangé) ...
     header_info
     echo "Loading templates..."
     pveam update >/dev/null 2>&1
@@ -167,6 +169,7 @@ while true; do
 
   # --- Set Hostname ---
   if [[ "$CURRENT_STEP" == "set_hostname" ]]; then
+      # ... (code inchangé) ...
       header_info
       DEFAULT_NAME=$(echo "$TEMPLATE" | cut -d'/' -f2 | cut -d'-' -f1)-$(echo "$TEMPLATE" | cut -d'/' -f2 | cut -d'-' -f2)
       USER_HN=$(whiptail --backtitle "Proxmox VE Helper Scripts" --inputbox "Enter Hostname" 10 60 "$DEFAULT_NAME" --ok-button "Next" --cancel-button "Back" 3>&1 1>&2 2>&3)
@@ -189,6 +192,7 @@ while true; do
 
   # --- Storage Selection Function ---
   function select_storage_step() {
+    # ... (code inchangé) ...
     local CLASS=$1
     local CURRENT_STORAGE_VAR_NAME=$2
     local NEXT_STEP_ON_SUCCESS=$3
@@ -278,6 +282,7 @@ while true; do
 
   # --- Select Packages ---
   if [[ "$CURRENT_STEP" == "select_packages" ]]; then
+      # ... (code presque inchangé, sauf la redirection à la fin) ...
       header_info
       info "Fetching package list from $PACKAGE_LIST_URL..."
       if ! curl -sSL "$PACKAGE_LIST_URL" -o "$TEMP_PACKAGE_LIST"; then
@@ -285,7 +290,8 @@ while true; do
           if whiptail --yesno "Failed to fetch the package list. \nSkip optional package installation?" 10 60 --yes-button "Skip Packages" --no-button "Go Back"; then
              SELECTED_PACKAGES=()
              info "Skipping optional package installation."
-             CURRENT_STEP="confirm_summary"
+             # --- MODIFIÉ --- Étape suivante
+             CURRENT_STEP="select_echanges"
           else
              info "Returning to Container Storage selection."
              CURRENT_STEP="select_container_storage"
@@ -296,7 +302,8 @@ while true; do
            if whiptail --yesno "Fetched package list is empty. \nSkip optional package installation?" 10 60 --yes-button "Skip Packages" --no-button "Go Back"; then
              SELECTED_PACKAGES=()
              info "Skipping optional package installation (list was empty)."
-             CURRENT_STEP="confirm_summary"
+             # --- MODIFIÉ --- Étape suivante
+             CURRENT_STEP="select_echanges"
           else
              info "Returning to Container Storage selection."
              CURRENT_STEP="select_container_storage"
@@ -312,7 +319,8 @@ while true; do
           if [ ${#PACKAGE_MENU[@]} -eq 0 ]; then
               info "No valid packages found in the list. Skipping selection."
               SELECTED_PACKAGES=()
-              CURRENT_STEP="confirm_summary"
+              # --- MODIFIÉ --- Étape suivante
+              CURRENT_STEP="select_echanges"
               sleep 1
           else
               CHOICES=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "Select Optional Packages" --checklist \
@@ -328,7 +336,8 @@ while true; do
                   else
                       info "All optional packages were deselected."
                   fi
-                  CURRENT_STEP="confirm_summary"
+                  # --- MODIFIÉ --- Étape suivante
+                  CURRENT_STEP="select_echanges"
               else
                   info "Returning to Container Storage selection."
                   CURRENT_STEP="select_container_storage"
@@ -337,6 +346,38 @@ while true; do
           fi
       fi
       sleep 1
+  fi
+  
+  # --- NOUVEAU --- Menu de sélection pour le dossier Echanges
+  if [[ "$CURRENT_STEP" == "select_echanges" ]]; then
+    header_info
+    
+    # Prépare le menu avec l'option par défaut pré-sélectionnée
+    MOUNT_ON="OFF"; FOLDER_ON="OFF"; NONE_ON="OFF"
+    case "$ECHANGES_CHOICE" in
+      mount) MOUNT_ON="ON" ;;
+      folder) FOLDER_ON="ON" ;;
+      none) NONE_ON="ON" ;;
+    esac
+
+    CHOICE=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "Configuration du dossier 'Echanges'" --radiolist \
+    "\nComment voulez-vous configurer le dossier 'Echanges' ?\n(Source de l'hôte : ${ECHANGES_HOST_PATH})\n(Destination du LXC : ${ECHANGES_GUEST_PATH})" \
+    20 78 3 \
+    "mount" "Bind Mount (dossier partagé avec l'hôte Proxmox)" "$MOUNT_ON" \
+    "folder" "Dossier Vide (créé à l'intérieur du LXC uniquement)" "$FOLDER_ON" \
+    "none" "Ne Rien Faire (aucun dossier 'Echanges' ne sera créé)" "$NONE_ON" \
+    --ok-button "Next" --cancel-button "Back" 3>&1 1>&2 2>&3)
+    EXIT_STATUS=$?
+    
+    if [ $EXIT_STATUS -eq 0 ]; then
+      ECHANGES_CHOICE="$CHOICE"
+      info "Choix pour 'Echanges': $ECHANGES_CHOICE"
+      CURRENT_STEP="confirm_summary"
+    else
+      info "Returning to Package selection."
+      CURRENT_STEP="select_packages"
+      continue
+    fi
   fi
 
 
@@ -353,9 +394,26 @@ while true; do
       SUMMARY+="Root Password:    $PASS_POTENTIAL (will be set)\n"
       SUMMARY+="Template Storage: $TEMPLATE_STORAGE\n"
       SUMMARY+="RootFS Storage:   $CONTAINER_STORAGE\n"
-      SUMMARY+="Mandatory Mount:\n"
-      SUMMARY+="  - Host: $MANDATORY_HOST_PATH -> Guest: $MANDATORY_GUEST_PATH\n"
-      SUMMARY+="  (Note: Requires correct host permissions for access)\n"
+
+      # --- MODIFIÉ --- Affichage conditionnel pour le dossier Echanges
+      SUMMARY+="Dossier 'Echanges':\n"
+      case "$ECHANGES_CHOICE" in
+        mount)
+          SUMMARY+="  - Type: Bind Mount (partagé avec l'hôte)\n"
+          SUMMARY+="  - Host: $ECHANGES_HOST_PATH -> Guest: $ECHANGES_GUEST_PATH\n"
+          if [ ! -d "$ECHANGES_HOST_PATH" ]; then
+            SUMMARY+="  - \e[93m[WARNING]\e[39m Le chemin hôte n'existe pas !\n"
+          fi
+          ;;
+        folder)
+          SUMMARY+="  - Type: Dossier Vide (créé dans le LXC)\n"
+          SUMMARY+="  - Chemin: $ECHANGES_GUEST_PATH\n"
+          ;;
+        none)
+          SUMMARY+="  - Type: Désactivé\n"
+          ;;
+      esac
+
       SUMMARY+="System Update:    YES (after creation)\n"
       SUMMARY+="Packages to Install:\n"
       if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
@@ -371,7 +429,6 @@ while true; do
       else
            SUMMARY+="  - Skipped (Host key $HOST_SSH_KEY_PATH not found or empty)\n"
       fi
-      # NOUVEAU: Info sur le clonage Git dans le résumé
       SUMMARY+="Git Repo Scripts:\n"
       SUMMARY+="  - Will clone '$GIT_REPO_URL'\n"
       SUMMARY+="  - Copy '$GIT_REPO_SOURCE_DIR' dir to '$LXC_SCRIPT_DEST'\n"
@@ -390,8 +447,9 @@ while true; do
               CURRENT_STEP="create_lxc"
               ;;
           1) # No (Go Back)
-              info "Returning to Package selection."
-              CURRENT_STEP="select_packages"
+              info "Returning to 'Echanges' selection."
+              # --- MODIFIÉ --- Étape précédente
+              CURRENT_STEP="select_echanges"
               PASS=""
               CTID=""
               continue
@@ -412,23 +470,19 @@ while true; do
   fi
 
   # Safety net for unknown state
-  if [[ ! "$CURRENT_STEP" =~ ^(start|select_template|set_hostname|select_template_storage|select_container_storage|select_packages|confirm_summary|create_lxc)$ ]]; then
+  # --- MODIFIÉ --- Ajout de la nouvelle étape à la validation
+  if [[ ! "$CURRENT_STEP" =~ ^(start|select_template|set_hostname|select_template_storage|select_container_storage|select_packages|select_echanges|confirm_summary|create_lxc)$ ]]; then
       die "Error: Unknown script state '$CURRENT_STEP'."
   fi
 
 done # End of the main while loop
 
 # --- Proceed with Actual Creation (Outside the loop) ---
-# CTID and PASS are set
-
+# ... (code inchangé jusqu'à la configuration du montage) ...
 header_info
 info "Starting LXC Creation Process for CT $CTID..."
-
-# --- Download Template ---
 msg "Downloading LXC template '$TEMPLATE' to storage '$TEMPLATE_STORAGE'..."
 pveam download "$TEMPLATE_STORAGE" "$TEMPLATE" >/dev/null || die "Failed to download LXC template '$TEMPLATE'."
-
-# --- Define PCT Options ---
 HOST_ARCH=$(dpkg --print-architecture)
 PCT_OPTIONS=(
     -hostname "$HN" -net0 name=eth0,bridge=vmbr0,ip=dhcp
@@ -439,27 +493,31 @@ PCT_OPTIONS=(
     -rootfs "$CONTAINER_STORAGE":8
     -arch "$HOST_ARCH"
 )
-
-# --- Create LXC ---
 msg "Creating LXC container $CTID..."
 eval pct create "$CTID" \"${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}\" "${PCT_OPTIONS[@]}" >/dev/null ||
   die "Failed to create LXC container $CTID."
 info "LXC Container $CTID created."
 
-# --- Configure Mandatory Mount Point ---
-info "Configuring mandatory mount point: Host='${MANDATORY_HOST_PATH}' -> Guest='${MANDATORY_GUEST_PATH}'"
-mp_index_set="?" # Variable to store the index used
-if [ -d "$MANDATORY_HOST_PATH" ]; then
-    mp_index=0
-    while pct config $CTID | grep -q -E "^mp${mp_index}:"; do
-        ((mp_index++))
-    done
-    info "Using mount point index mp${mp_index} for mandatory mount."
-    pct set $CTID -mp${mp_index} "${MANDATORY_HOST_PATH},mp=${MANDATORY_GUEST_PATH},backup=0" || warn "Failed to set mandatory mount point mp${mp_index} for $CTID."
-    mp_index_set=$mp_index # Store the index that was actually used
-else
-    warn "Host path '${MANDATORY_HOST_PATH}' not found. Skipping configuration of mandatory mount point."
-    warn "Mount will likely fail inside the container. Create the host path and potentially restart the container or re-run 'pct set $CTID -mpX ...' manually."
+# --- MODIFIÉ --- Logique conditionnelle pour le dossier "Echanges"
+ECHANGES_CONFIG_MSG="Dossier Echanges: Désactivé par l'utilisateur."
+if [[ "$ECHANGES_CHOICE" == "mount" ]]; then
+    info "Configuring bind mount: Host='${ECHANGES_HOST_PATH}' -> Guest='${ECHANGES_GUEST_PATH}'"
+    if [ -d "$ECHANGES_HOST_PATH" ]; then
+        mp_index=0
+        while pct config $CTID | grep -q -E "^mp${mp_index}:"; do
+            ((mp_index++))
+        done
+        info "Using mount point index mp${mp_index}."
+        pct set $CTID -mp${mp_index} "${ECHANGES_HOST_PATH},mp=${ECHANGES_GUEST_PATH},backup=0" || warn "Failed to set mount point mp${mp_index} for $CTID."
+        ECHANGES_CONFIG_MSG="Bind Mount: Host ${ECHANGES_HOST_PATH} -> Guest ${ECHANGES_GUEST_PATH} (configuré comme mp${mp_index})"
+    else
+        warn "Host path '${ECHANGES_HOST_PATH}' not found. Skipping configuration of bind mount."
+        warn "Mount will likely fail inside the container. Create the host path and restart the container."
+        ECHANGES_CONFIG_MSG="Bind Mount: ECHEC, le chemin hôte ${ECHANGES_HOST_PATH} n'existe pas."
+    fi
+elif [[ "$ECHANGES_CHOICE" == "folder" ]]; then
+    info "Le choix était de créer un dossier vide, ceci sera fait après le démarrage du LXC."
+    ECHANGES_CONFIG_MSG="Dossier Vide: Sera créé à ${ECHANGES_GUEST_PATH} après le démarrage."
 fi
 
 # --- Save Credentials ---
@@ -469,13 +527,13 @@ CREDS_FILE="${CREDS_DIR}/${HN}_${CTID}.creds"
 echo "LXC Hostname: ${HN}" > "$CREDS_FILE"
 echo "LXC ID: ${CTID}" >> "$CREDS_FILE"
 echo "Root Password: ${PASS}" >> "$CREDS_FILE"
-echo "Mandatory Mount: Host ${MANDATORY_HOST_PATH} -> Guest ${MANDATORY_GUEST_PATH} (configured as mp${mp_index_set})" >> "$CREDS_FILE" # Use stored index
+# --- MODIFIÉ --- Message de crédentiel mis à jour
+echo "$ECHANGES_CONFIG_MSG" >> "$CREDS_FILE"
 if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
     echo "SSH Key Added: Yes (from $HOST_SSH_KEY_PATH)" >> "$CREDS_FILE"
 else
     echo "SSH Key Added: No (file not found or empty)" >> "$CREDS_FILE"
 fi
-# NOUVEAU: Info Git dans le fichier creds (sera mis à jour plus tard avec le succès/échec)
 echo "Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): Attempting copy to $LXC_SCRIPT_DEST" >> "$CREDS_FILE"
 chmod 600 "$CREDS_FILE"
 info "Credentials saved to $CREDS_FILE"
@@ -488,10 +546,15 @@ sleep 8
 
 # --- Post-Start Operations ---
 
-# --- Ensure Mandatory Mount Directory Exists ---
-info "Ensuring mandatory mount directory exists inside LXC: ${MANDATORY_GUEST_PATH}"
-pct exec $CTID -- mkdir -p "${MANDATORY_GUEST_PATH}" || warn "Attempt to create directory '${MANDATORY_GUEST_PATH}' inside LXC failed."
+# --- MODIFIÉ --- Logique conditionnelle pour la création du dossier
+if [[ "$ECHANGES_CHOICE" == "folder" ]]; then
+    info "Création du dossier vide '${ECHANGES_GUEST_PATH}' à l'intérieur du LXC."
+    pct exec $CTID -- mkdir -p "${ECHANGES_GUEST_PATH}" || warn "La création du dossier '${ECHANGES_GUEST_PATH}' dans le LXC a échoué."
+    # Optionnel: définir des permissions larges
+    # pct exec $CTID -- chmod 777 "${ECHANGES_GUEST_PATH}"
+fi
 
+# ... (le reste du script est inchangé) ...
 # Get IP Address
 set +eEuo pipefail
 max_attempts=8; attempt=1; IP=""
@@ -527,7 +590,7 @@ else
     info "No optional packages were selected for installation."
 fi
 
-# --- Inject Host SSH Key if found ---
+# Inject Host SSH Key if found
 SSH_KEY_ADDED_SUCCESS=false
 if [[ -n "$HOST_SSH_KEY_CONTENT" ]]; then
     info "Adding host SSH key ($HOST_SSH_KEY_PATH) to LXC $CTID root user..."
@@ -542,74 +605,52 @@ else
     info "Skipping SSH key addition (key file not found or empty)."
 fi
 
-# --- NOUVEAU: Clone Git Repo, Copy Scripts, Set Permissions ---
+# Clone Git Repo, Copy Scripts, Set Permissions
 info "Attempting Git operations: Clone '$GIT_REPO_URL', copy '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST'..."
-
-# Définir les commandes à exécuter dans le conteneur
-# Utilisation de && pour chaîner les commandes : si une échoue, les suivantes ne s'exécutent pas.
 COMMANDS_TO_RUN=$(cat <<EOF
 export DEBIAN_FRONTEND=noninteractive;
 echo '>>> [GitOps] Installing git...';
 apt-get update > /dev/null && apt-get install -y git;
 if [ \$? -ne 0 ]; then echo 'ERROR: Failed to install git.' >&2; exit 1; fi;
-
 echo '>>> [GitOps] Removing previous temporary clone directory (if any)...';
 rm -rf '$LXC_TEMP_CLONE_PATH';
-
 echo '>>> [GitOps] Cloning repository $GIT_REPO_URL...';
 git clone --depth 1 '$GIT_REPO_URL' '$LXC_TEMP_CLONE_PATH';
 if [ \$? -ne 0 ]; then echo 'ERROR: Failed to clone repository $GIT_REPO_URL.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
-
 echo '>>> [GitOps] Checking if source directory exists: ${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}';
 if [ ! -d '${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}' ]; then
     echo 'ERROR: Source directory ${GIT_REPO_SOURCE_DIR} not found in the cloned repository.' >&2;
-    rm -rf '$LXC_TEMP_CLONE_PATH'; # Nettoyer le clone temporaire
+    rm -rf '$LXC_TEMP_CLONE_PATH';
     exit 1;
 fi;
-
 echo '>>> [GitOps] Creating destination directory $LXC_SCRIPT_DEST...';
 mkdir -p '$LXC_SCRIPT_DEST';
 if [ \$? -ne 0 ]; then echo 'ERROR: Failed to create destination directory $LXC_SCRIPT_DEST.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
-
 echo '>>> [GitOps] Copying directory contents from ${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR} to $LXC_SCRIPT_DEST...';
-# Copie le contenu du dossier source vers la destination. Le /.' est important.
 cp -r '${LXC_TEMP_CLONE_PATH}/${GIT_REPO_SOURCE_DIR}/.' '$LXC_SCRIPT_DEST/';
 if [ \$? -ne 0 ]; then echo 'ERROR: Failed to copy script directory.' >&2; rm -rf '$LXC_TEMP_CLONE_PATH'; exit 1; fi;
-
 echo '>>> [GitOps] Setting execute permissions on files in $LXC_SCRIPT_DEST...';
 find '$LXC_SCRIPT_DEST' -type f -name '*.sh' -exec chmod +x {} \; ;
-if [ \$? -ne 0 ]; then echo 'WARNING: Failed to set execute permissions on some scripts.' >&2; fi; # Peut-être juste un avertissement ici?
-
+if [ \$? -ne 0 ]; then echo 'WARNING: Failed to set execute permissions on some scripts.' >&2; fi;
 echo '>>> [GitOps] Cleaning up temporary clone directory $LXC_TEMP_CLONE_PATH...';
 rm -rf '$LXC_TEMP_CLONE_PATH';
-
 echo '>>> [GitOps] Script copy and permission setting completed.';
-exit 0; # Succès global des opérations Git
+exit 0;
 EOF
 )
-
-# Exécuter les commandes dans le conteneur
-# Désactiver temporairement l'arrêt sur erreur pour capturer le code de sortie de pct exec
 set +e
 pct exec $CTID -- bash -c "$COMMANDS_TO_RUN"
 EXEC_STATUS=$?
-set -e # Réactiver l'arrêt sur erreur
-
-# Vérifier le succès de l'opération Git
+set -e
 if [ $EXEC_STATUS -eq 0 ]; then
     info "Successfully cloned repo, copied '$GIT_REPO_SOURCE_DIR' to '$LXC_SCRIPT_DEST', and set permissions."
     GIT_CLONE_SCRIPT_SUCCESS=true
-    # Mettre à jour le fichier creds pour indiquer le succès
     sed -i "/^Git Scripts/c\Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): Successfully copied to $LXC_SCRIPT_DEST" "$CREDS_FILE"
 else
     warn "Git operations failed (clone, copy, or chmod). Check logs above for details."
     GIT_CLONE_SCRIPT_SUCCESS=false
-    # Mettre à jour le fichier creds pour indiquer l'échec
     sed -i "/^Git Scripts/c\Git Scripts ($GIT_REPO_SOURCE_DIR from $GIT_REPO_URL): FAILED to copy to $LXC_SCRIPT_DEST" "$CREDS_FILE"
-    # Ne pas mourir ici, l'échec du clonage n'est peut-être pas critique pour l'utilisateur
 fi
-# --- Fin de la section Git ---
-
 
 # --- Success Message ---
 header_info; echo
@@ -629,13 +670,25 @@ else
 fi
 echo
 
-info "Mandatory Mount Configured:"
-info "  - Host: ${MANDATORY_HOST_PATH} -> Guest: ${MANDATORY_GUEST_PATH}"
-if [ ! -d "$MANDATORY_HOST_PATH" ]; then
-     info "  \e[93m[WARNING]\e[39m Host path was not found during script run. Mount will likely fail."
-fi
-info "  (For mount to work, requires correct permissions on \e[93mHOST\e[39m path '$MANDATORY_HOST_PATH' for UID 100000)."
-info "  (Check mount status inside LXC with: df -h | grep $MANDATORY_GUEST_PATH )"
+# --- MODIFIÉ --- Message de succès mis à jour pour Echanges
+info "Configuration du dossier 'Echanges':"
+case "$ECHANGES_CHOICE" in
+  mount)
+    info "  - Type: Bind Mount (partagé)"
+    info "  - Host: ${ECHANGES_HOST_PATH} -> Guest: ${ECHANGES_GUEST_PATH}"
+    if [ ! -d "$ECHANGES_HOST_PATH" ]; then
+      info "  \e[93m[WARNING]\e[39m Le chemin hôte n'a pas été trouvé. Le montage échouera probablement."
+    fi
+    info "  (Vérifiez le montage dans le LXC avec: df -h | grep ${ECHANGES_GUEST_PATH})"
+    ;;
+  folder)
+    info "  - Type: Dossier Vide"
+    info "  - Créé à l'intérieur du LXC au chemin: ${ECHANGES_GUEST_PATH}"
+    ;;
+  none)
+    info "  - Type: Désactivé (Aucune action effectuée)."
+    ;;
+esac
 echo
 
 if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
@@ -643,8 +696,6 @@ if [ ${#SELECTED_PACKAGES[@]} -gt 0 ]; then
     for pkg in "${SELECTED_PACKAGES[@]}"; do info "  - $pkg"; done
     echo
 fi
-
-# NOUVEAU: Message sur le statut des scripts Git
 info "Git Repository Scripts:"
 if [[ "$GIT_CLONE_SCRIPT_SUCCESS" == true ]]; then
     info "  - Successfully cloned '$GIT_REPO_URL'"
@@ -655,7 +706,6 @@ else
     info "  - Check the script output above for error messages from inside the container."
 fi
 echo
-
 info "LXC is updated and set to start on boot. Access via console ('pct enter $CTID') or SSH (if key added)."
 echo; msg "Done."
 
