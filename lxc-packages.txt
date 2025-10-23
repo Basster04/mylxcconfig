@@ -5,3 +5,5 @@ bat
 ripgrep
 btop
 nmap
+nnn
+mc
