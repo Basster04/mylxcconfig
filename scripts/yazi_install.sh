@@ -1,48 +1,113 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# ==========================================
+# 🚀 Script prêt à l'emploi : installation automatique de Yazi
+# Compatible Debian/Ubuntu LXC + zsh + swap
+# ==========================================
+
 set -e
 
-echo "🔧 Installation de Yazi sur Debian/Ubuntu"
+echo "=========================================="
+echo " 🦀 Installation de Yazi sur ce conteneur "
+echo "=========================================="
 
-# Étape 1 : dépendances système
-echo "📦 Installation des dépendances..."
-apt update -y
+# --- Vérification root ---
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Ce script doit être exécuté en root."
+  exit 1
+fi
+
+# --- Vérification RAM et swap ---
+RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+SWAP_NEEDED=2000000   # 2 Go minimum
+if [ "$RAM_KB" -lt "$SWAP_NEEDED" ]; then
+  echo "💾 RAM insuffisante (<2Go), création d'un fichier swap de 2Go..."
+  if ! swapon --show | grep -q "swapfile"; then
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  else
+    echo "✅ Swap déjà activé."
+  fi
+else
+  echo "✅ RAM suffisante : $(($RAM_KB/1024)) Mo"
+fi
+
+# --- Mise à jour système ---
+echo "🧩 Mise à jour des paquets..."
+apt update -y && apt upgrade -y
+
+# --- Installation dépendances ---
+echo "🛠️ Installation des dépendances système..."
 apt install -y curl git build-essential pkg-config libssl-dev unzip
 
-# Étape 2 : installation de Rust (si non déjà présent)
-if ! command -v cargo >/dev/null 2>&1; then
+# --- Vérification et installation de Rust ---
+if ! command -v cargo &>/dev/null; then
   echo "🦀 Installation de Rust..."
-  curl https://sh.rustup.rs -sSf | sh -s -- -y
-  . "$HOME/.cargo/env"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  source $HOME/.cargo/env
 else
-  echo "✅ Rust est déjà installé"
-  . "$HOME/.cargo/env"
+  echo "✅ Rust déjà présent."
+  source $HOME/.cargo/env
 fi
 
-# Étape 3 : clonage du dépôt Yazi
-cd /tmp
-if [ -d "yazi" ]; then
-  rm -rf yazi
-fi
-echo "📥 Clonage du dépôt Yazi..."
-git clone https://github.com/sxyazi/yazi.git
-cd yazi
+# --- Téléchargement et compilation de Yazi ---
+WORKDIR=$(mktemp -d)
+echo "📦 Téléchargement du dépôt Yazi dans $WORKDIR ..."
+git clone --depth 1 https://github.com/sxyazi/yazi.git "$WORKDIR"
+cd "$WORKDIR"
 
-# Étape 4 : compilation
-echo "⚙️ Compilation de Yazi (cela peut prendre 1-2 minutes)..."
-cargo build --release --locked
+echo "⚙️ Compilation de Yazi (cela peut prendre plusieurs minutes)..."
+cargo build --release --locked -j1
 
-# Étape 5 : installation du binaire
-echo "🚀 Installation du binaire..."
-install -m 755 target/release/yazi /usr/local/bin/yazi
-
-# Étape 6 : nettoyage
-echo "🧹 Nettoyage..."
-cd ~
-rm -rf /tmp/yazi
-
-# Étape 7 : test
-if command -v yazi >/dev/null 2>&1; then
-  echo "✅ Yazi est installé avec succès ! Lance-le avec : yazi"
+# --- Installation du binaire ---
+BIN_PATH=$(find target/release -type f -name yazi -perm -111 | head -n1)
+if [ -n "$BIN_PATH" ]; then
+  echo "🚀 Installation du binaire depuis $BIN_PATH ..."
+  install -m 755 "$BIN_PATH" /usr/local/bin/yazi
 else
-  echo "❌ Erreur : Yazi ne semble pas installé correctement."
+  echo "❌ Erreur : binaire Yazi non trouvé après compilation."
+  exit 1
 fi
+
+# --- Vérification du binaire ---
+if command -v /usr/local/bin/yazi &>/dev/null; then
+  echo "✅ Yazi installé : $(/usr/local/bin/yazi --version)"
+else
+  echo "❌ Yazi n’est pas détecté dans le PATH."
+  exit 1
+fi
+
+# --- Vérification de zsh ---
+if ! command -v zsh &>/dev/null; then
+  echo "💡 zsh n’est pas installé, installation en cours..."
+  apt install -y zsh
+  chsh -s "$(command -v zsh)" root
+else
+  echo "✅ zsh déjà installé."
+fi
+
+# --- Mise à jour du PATH pour bash et zsh ---
+for shellrc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ ! -f "$shellrc" ] && touch "$shellrc"
+  if ! grep -q "/usr/local/bin" "$shellrc"; then
+    echo 'export PATH="/usr/local/bin:$PATH"' >> "$shellrc"
+  fi
+done
+
+# --- Rechargement du shell actif ---
+if [ -n "$ZSH_VERSION" ]; then
+  source ~/.zshrc
+elif [ -n "$BASH_VERSION" ]; then
+  source ~/.bashrc
+fi
+
+# --- Nettoyage ---
+rm -rf "$WORKDIR"
+
+echo ""
+echo "=========================================="
+echo "🎉 Installation terminée !"
+echo "➡️ Lance Yazi avec :  yazi"
+echo "=========================================="
