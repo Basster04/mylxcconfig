@@ -2,3 +2,5 @@ tree
 curl
 zsh
 bat
+ripgrep
+btop
