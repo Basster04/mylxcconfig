@@ -7,3 +7,4 @@ btop
 nmap
 nnn
 mc
+ncdu
